@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#050507" />
+<meta name="build" content="__BUILD__" />
+<title>LLM Bench · 中转 API 性能 / 降智检测</title>
+<link rel="icon" href="/static/favicon.svg" />
+<link rel="stylesheet" href="/static/style.css?v=__BUILD__" />
+<script src="/static/echarts.min.js?v=__BUILD__"></script>
+</head>
+<body>
+<div id="app">
+  <!-- ============ 左导轨 ============ -->
+  <nav class="rail">
+    <div class="rail-brand">
+      <div class="rail-logo" title="LLM Bench">
+        <canvas id="logoScene" aria-hidden="true"></canvas>
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <defs><mask id="beaver-face">
+            <rect width="24" height="24" fill="#fff"/>
+            <circle cx="9.4" cy="11.6" r="1.15" fill="#000"/>
+            <circle cx="14.6" cy="11.6" r="1.15" fill="#000"/>
+            <rect x="11.7" y="17.1" width="0.6" height="3.8" fill="#000"/>
+          </mask></defs>
+          <g mask="url(#beaver-face)" fill="currentColor">
+            <circle cx="12" cy="13.2" r="7"/>
+            <circle cx="6.6" cy="6.6" r="2.2"/>
+            <circle cx="17.4" cy="6.6" r="2.2"/>
+            <rect x="10.4" y="17.1" width="3.2" height="4.6" rx="1.2"/>
+          </g>
+        </svg>
+      </div>
+      <div class="rail-brand-tx"><b>LLM Bench</b><span>中转 API 检定台</span></div>
+    </div>
+    <div class="rail-cap">检测</div>
+    <button class="rail-item on" data-view="perf" title="性能压测" aria-label="性能压测">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 12h4l2 6 4-14 2 8h6"/></svg>
+      <span>性能压测</span>
+    </button>
+    <button class="rail-item" data-view="bench" title="降智检测" aria-label="降智检测">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+      <span>降智检测</span>
+    </button>
+    <div class="rail-spacer"></div>
+    <div class="rail-cap">工具</div>
+    <button class="rail-item" id="btnPaletteRail" title="搜索 (⌘K)" aria-label="搜索 (⌘K)">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <span>搜索</span>
+      <kbd>⌘K</kbd>
+    </button>
+    <div class="rail-foot" id="railBuild" title="构建版本"></div>
+  </nav>
+
+  <!-- ============ 配置侧栏 ============ -->
+  <aside class="sidebar">
+    <div class="side-scroll">
+      <!-- 性能压测 -->
+      <div id="side-perf">
+        <div class="blk">
+          <div class="blk-hd">
+            <h2>目标渠道</h2>
+            <span class="blk-meta" id="chanCount">未解析</span>
+          </div>
+          <textarea id="paste" aria-label="粘贴供应商配置" placeholder="把供应商给的任何东西粘进来：地址、密钥、模型名、JSON、curl、表格、一行一个渠道……"></textarea>
+          <div class="btnrow">
+            <button id="btnParse" class="primary">识别配置</button>
+            <button id="btnProbe" class="ghost">探活测速</button>
+            <button id="btnModels" class="ghost">拉模型</button>
+            <button id="btnCache" class="ghost">缓存检测</button>
+            <button id="btnDemo" class="mini ghost">示例</button>
+          </div>
+          <div id="channels" class="channels"></div>
+        </div>
+
+        <details class="sect" open>
+          <summary>测试参数</summary>
+          <div class="sect-bd">
+            <label>负载模式</label>
+            <select id="mode">
+              <option value="closed">并发（closed-loop，评质量）</option>
+              <option value="open">定频（open-loop，CO 修正）</option>
+              <option value="duration">时长（ramp→steady→cooldown）</option>
+            </select>
+            <div class="row">
+              <div><label>并发</label><input id="concurrency" type="number" value="2" min="1" max="256" /></div>
+              <div><label>总请求数</label><input id="request_count" type="number" value="100" min="1" /></div>
+            </div>
+            <div class="row">
+              <div><label>定频 rate（req/s）</label><input id="rate" type="number" value="5" min="0.1" step="0.5" /></div>
+              <div><label>时长（秒）</label><input id="duration_s" type="number" value="60" min="1" /></div>
+            </div>
+            <div class="row">
+              <div><label>预热次数</label><input id="warmup" type="number" value="3" min="0" /></div>
+              <div><label>超时（秒）</label><input id="timeout_s" type="number" value="120" min="1" /></div>
+            </div>
+          </div>
+        </details>
+
+        <details class="sect">
+          <summary>请求与网络</summary>
+          <div class="sect-bd">
+            <div class="row">
+              <div><label>重试次数</label><input id="retries" type="number" value="0" min="0" max="5" /></div>
+              <div><label>间隔抖动 0~1</label><input id="jitter" type="number" value="0" min="0" max="1" step="0.05" /></div>
+            </div>
+            <label class="switch"><input type="checkbox" id="stream" checked />流式输出（测首字延迟必须开）</label>
+            <label class="switch"><input type="checkbox" id="connection_reuse" checked />连接复用 keep-alive</label>
+            <label class="switch"><input type="checkbox" id="randomize" checked />随机化请求，降低被识别概率</label>
+            <label>代理地址（留空则直连）</label>
+            <input id="proxy" type="text" placeholder="http://127.0.0.1:7890" />
+          </div>
+        </details>
+
+        <details class="sect">
+          <summary>请求内容</summary>
+          <div class="sect-bd">
+            <div class="row">
+              <div><label>Prompt 来源</label>
+                <select id="prompt_mode">
+                  <option value="tiny">极短（hi）</option>
+                  <option value="sample">按输入长度生成</option>
+                  <option value="custom">自定义</option>
+                </select>
+              </div>
+              <div><label>输入 tokens</label><input id="input_tokens" type="number" value="128" /></div>
+            </div>
+            <label>自定义 prompt</label>
+            <textarea id="prompt" style="min-height:56px" placeholder="仅 Prompt 来源选「自定义」时生效"></textarea>
+            <div class="row">
+              <div><label>max_tokens</label><input id="max_tokens" type="number" value="256" /></div>
+              <div><label>temperature</label><input id="temperature" type="number" value="0" step="0.1" /></div>
+            </div>
+          </div>
+        </details>
+
+        <details class="sect">
+          <summary>合格线 · 成本</summary>
+          <div class="sect-bd">
+            <div class="hint" style="margin:0 0 6px">三项同时达标才算「正常」，右侧判定完全按这三条来。</div>
+            <div class="row">
+              <div><label>首字延迟 ≤ ms</label><input id="slo_ttft" type="number" value="1500" /></div>
+              <div><label>逐 token ≤ ms</label><input id="slo_tpot" type="number" value="50" /></div>
+            </div>
+            <div class="row">
+              <div><label>端到端 ≤ ms</label><input id="slo_e2e" type="number" value="5000" /></div>
+            </div>
+            <div class="row">
+              <div><label>输入 ¥ / 百万 token</label><input id="price_in" type="number" value="0" step="0.01" /></div>
+              <div><label>输出 ¥ / 百万 token</label><input id="price_out" type="number" value="0" step="0.01" /></div>
+            </div>
+            <label>缓存命中 ¥ / 百万 token（留空=与输入同价）</label>
+            <input id="price_cache_in" type="number" value="0" step="0.01" />
+          </div>
+        </details>
+
+        <details class="sect">
+          <summary>缓存检测</summary>
+          <div class="sect-bd">
+            <div class="hint" style="margin:0 0 6px">同一长前缀串行发 N 次：第 1 次写缓存（miss），后续应命中。加速比达标才算「缓存有效」，能揪出上报命中但不加速的假缓存。</div>
+            <div class="row">
+              <div><label>轮数（1 次写入 + 命中）</label><input id="c_rounds" type="number" value="6" min="2" max="20" /></div>
+              <div><label>前缀长度（tokens）</label><input id="c_prefix" type="number" value="2048" min="64" /></div>
+            </div>
+            <div class="row">
+              <div><label>加速比阈值（≥ 判有效）</label><input id="c_speedup" type="number" value="1.5" step="0.1" /></div>
+            </div>
+            <div class="hint">注意：前缀长度需达到渠道的最低可缓存门槛（OpenAI 1024 / Anthropic 依模型 2048+），否则可能命中但不加速。</div>
+          </div>
+        </details>
+
+        <details class="sect">
+          <summary>定时巡检 · 告警</summary>
+          <div class="sect-bd">
+            <div class="row">
+              <div><label>任务名称</label><input id="sch_name" type="text" value="每小时巡检" /></div>
+              <div><label>cron</label><input id="sch_cron" type="text" value="0 * * * *" /></div>
+            </div>
+            <div class="row">
+              <div><label>通知方式</label>
+                <select id="alert_kind">
+                  <option value="none">不通知</option>
+                  <option value="feishu">飞书机器人</option>
+                  <option value="generic">通用 Webhook</option>
+                </select>
+              </div>
+              <div><label>成功率下限</label><input id="alert_sr" type="number" value="0.95" step="0.01" /></div>
+            </div>
+            <label>Webhook 地址</label>
+            <input id="alert_url" type="text" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" />
+            <div class="btnrow"><button id="btnSchedule" class="ghost">创建定时任务</button></div>
+            <div id="schedules" class="channels"></div>
+          </div>
+        </details>
+      </div>
+
+      <!-- 降智检测 -->
+      <div id="side-bench" hidden>
+        <div class="blk">
+          <div class="blk-hd"><h2>被测渠道</h2><span class="blk-meta" id="b-chanCount">未解析</span></div>
+          <textarea id="b-paste" aria-label="粘贴被测渠道配置" placeholder="同上，任何形式都能识别"></textarea>
+          <div class="btnrow">
+            <button id="btnBenchParse" class="primary">识别配置</button>
+            <button id="btnBenchDemo" class="mini ghost">示例</button>
+          </div>
+          <div id="b-channels" class="channels"></div>
+        </div>
+
+        <details class="sect" open>
+          <summary>题集</summary>
+          <div class="sect-bd">
+            <label>题集来源</label>
+            <select id="b-engine">
+              <option value="curated">轻量自建集（57 题，秒级）</option>
+              <option value="lm_eval">官方数据集（lm-eval，分数可比）</option>
+            </select>
+            <div id="b-official-params" hidden>
+              <div class="row">
+                <div><label>每任务题量</label>
+                  <select id="b-limit">
+                    <option value="50">50（快速）</option>
+                    <option value="200" selected>200（推荐）</option>
+                    <option value="1000">1000</option>
+                    <option value="0">全量</option>
+                  </select>
+                </div>
+                <div><label>并发请求</label><input id="b-concurrent" type="number" value="8" min="1" max="64" /></div>
+              </div>
+              <div class="row">
+                <div><label>few-shot（留空=任务默认）</label><input id="b-fewshot" type="number" min="0" max="10" placeholder="默认" /></div>
+                <div><label>随机种子</label><input id="b-seed" type="number" value="42" /></div>
+              </div>
+              <div class="row">
+                <div><label>显著性 α</label><input id="b-alpha" type="number" value="0.05" step="0.01" /></div>
+                <div><label>最小效应量</label><input id="b-mindelta" type="number" value="0.03" step="0.01" /></div>
+              </div>
+              <div class="btnrow">
+                <button id="btnPredownload" class="ghost mini">预下载数据集</button>
+                <span class="hint" id="b-hf-state"></span>
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <details class="sect" open>
+          <summary>检测维度 / 任务</summary>
+          <div class="sect-bd"><div id="b-dims" class="dims"></div></div>
+        </details>
+
+        <details class="sect" open>
+          <summary>检测参数</summary>
+          <div class="sect-bd">
+            <div class="row">
+              <div><label>temperature</label><input id="b-temperature" type="number" value="0" step="0.1" /></div>
+              <div><label>max_tokens</label><input id="b-max_tokens" type="number" value="512" /></div>
+            </div>
+            <div class="row">
+              <div><label>长上下文 tokens</label><input id="b-needle_tokens" type="number" value="4000" /></div>
+              <div><label>降智阈值</label><input id="b-threshold" type="number" value="0.10" step="0.01" /></div>
+            </div>
+            <div class="hint" style="margin:6px 0 0">阈值 = 总分下降多少算「疑似降智」。题量越小越容易被噪声触发，建议配合 200 题以上使用。</div>
+            <label>超时（秒）</label>
+            <input id="b-timeout_s" type="number" value="120" />
+            <label>代理地址（留空则直连）</label>
+            <input id="b-proxy" type="text" placeholder="http://127.0.0.1:7890" />
+          </div>
+        </details>
+      </div>
+
+      <div class="side-actions">
+        <div id="side-actions-perf">
+          <button id="btnStart" class="primary block">开始测试</button>
+          <div class="row" style="margin-top:6px">
+            <button id="btnPause">暂停</button>
+            <button id="btnStop" class="danger">停止</button>
+          </div>
+          <div class="hint"><kbd>⌘Enter</kbd> 开始　<kbd>⌘K</kbd> 识别　<kbd>⌘B</kbd> 收起</div>
+        </div>
+        <div id="side-actions-bench" hidden>
+          <button id="btnBenchRun" class="primary block">开始检测</button>
+          <div class="row" style="margin-top:6px"><button id="btnBenchStop" class="danger">停止</button></div>
+          <div class="hint">同一渠道与模型首次运行会自动记为基线，之后每次都与它对比。</div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ 主区 ============ -->
+  <main>
+    <header class="topbar">
+      <button class="icon-btn" id="btnSidebar" title="配置面板 (⌘B)" aria-label="配置面板 (⌘B)">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+      <div class="crumb"><b id="crumbTitle">性能压测</b></div>
+      <div class="tbar-spacer"></div>
+
+      <div class="toolbar perfonly">
+        <label class="tlabel" for="timerange">时间范围</label>
+        <select id="timerange" class="mini-select">
+          <option value="300">近 5 分钟</option>
+          <option value="900">近 15 分钟</option>
+          <option value="3600">近 1 小时</option>
+          <option value="0" selected>全部</option>
+        </select>
+        <button id="btnAutoRefresh" class="ghost on" title="自动刷新" aria-label="自动刷新">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg><span>自动刷新</span>
+        </button>
+      </div>
+
+      <div class="toolbar">
+        <span class="stat"><span class="led" id="health"></span><b id="healthTxt">…</b></span>
+        <span class="stat perfonly rec" id="rec" hidden><span class="led"></span>REC</span>
+        <span class="stat perfonly">运行 <b id="runCount">0</b></span>
+        <span class="stat perfonly">请求 <b id="reqCount">0</b></span>
+        <span class="stat perfonly">错误 <b id="errCount">0</b></span>
+        <span class="stat benchonly" hidden>条目 <b id="b-progress">0/0</b></span>
+        <span class="stat benchonly" hidden>通过 <b id="b-passed">0</b></span>
+        <span class="stat clock" id="clock">--:--:--</span>
+        <button id="btnGlossary" class="ghost mini" title="指标口径说明" aria-label="指标口径说明">?</button>
+        <button id="btnPalette" class="ghost mini" title="命令面板 ⌘K" aria-label="命令面板 ⌘K"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><kbd>⌘K</kbd></button>
+      </div>
+    </header>
+
+    <!-- 性能压测 -->
+    <div id="view-perf" class="view">
+      <div class="pin-strip" id="pinStrip" aria-label="全局参数栏：把侧栏参数拖进来变成快捷卡片"></div>
+      <div id="emptyPerf" class="onboard-wrap">
+        <div class="ob-card">
+          <h2>先测一条渠道</h2>
+          <p>把供应商给的地址、密钥、模型名贴进来，就能测出它真实的延迟、吞吐和稳定性。</p>
+          <ol>
+            <li>左侧粘贴配置，<b>任何形式都能识别</b>：键值对、JSON、curl、表格、一行一个渠道，甚至中英文说明混排</li>
+            <li>确认识别出的渠道，按需调整并发、时长与合格线</li>
+            <li>开始测试，右侧实时出波形；配置面板会自动收起</li>
+          </ol>
+          <div class="ob-btns">
+            <button class="primary" id="btnOpenConfig">打开配置面板</button>
+            <button class="ghost" id="btnQuickDemo">填入示例</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="perfDash" class="dash" hidden>
+        <section class="summary">
+          <div class="verdict-block" id="verdictBlock">
+            <div class="vb-state" id="vbState">等待运行</div>
+            <div class="vb-label">E2EL P95</div>
+            <div class="vb-num" id="vbNum">—<span id="vbUnit">ms</span></div>
+            <div class="vb-sub" id="vbSub">粘贴渠道配置并开始测试</div>
+            <div class="vb-slo" id="vbSlo"></div>
+            <div class="ticks" id="vbTicks"></div>
+            <div class="ticks-cap" id="vbTicksCap">最近请求</div>
+          </div>
+          <div class="readout">
+            <div class="readout-primary" id="roPrimary"></div>
+            <dl class="metrics" id="metrics"></dl>
+          </div>
+        </section>
+
+        <section class="panel-grid">
+          <div class="panel hero w7h2" data-panel="e2e">
+            <header class="panel-hd"><h3>E2EL <span class="ph-note">end-to-end latency · 散点为原始样本，色带为 P50–P95</span></h3><div class="panel-menu">
+              <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
+              <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+            </div></header>
+            <div class="panel-bd"><div class="chart" id="ch-e2e"></div></div>
+          </div>
+          <div class="panel w5h2" data-panel="ttft">
+            <header class="panel-hd"><h3>TTFT <span class="ph-note">time to first token · 与主图同一序列</span></h3><div class="panel-menu">
+              <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
+              <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+            </div></header>
+            <div class="panel-bd"><div class="chart" id="ch-ttft"></div></div>
+          </div>
+          <div class="panel w7h2" data-panel="tput">
+            <header class="panel-hd"><h3>Throughput <span class="ph-note" id="tputNote"></span></h3><div class="panel-menu">
+              <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
+              <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+            </div></header>
+            <div class="panel-bd"><div class="chart" id="ch-tput"></div></div>
+          </div>
+          <div class="panel w5h2" data-panel="dist">
+            <header class="panel-hd"><h3>Latency distribution <span class="ph-note">直方图与累积曲线</span></h3><div class="panel-menu">
+              <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
+              <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+            </div></header>
+            <div class="panel-bd"><div class="chart" id="ch-dist"></div></div>
+          </div>
+          <div class="panel w6" data-panel="tpot">
+            <header class="panel-hd"><h3>TPOT <span class="ph-note">time per output token · 与主图同一序列</span></h3><div class="panel-menu">
+              <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
+              <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+            </div></header>
+            <div class="panel-bd"><div class="chart" id="ch-tpot"></div></div>
+          </div>
+
+          <div class="panel w6" data-panel="heat">
+            <header class="panel-hd"><h3>Latency heatmap <span class="ph-note">横轴时间，纵轴延迟区间</span></h3><div class="panel-menu">
+              <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
+              <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+            </div></header>
+            <div class="panel-bd"><div class="chart" id="ch-heat"></div><div class="rollup" id="heatRollup" hidden></div></div>
+          </div>
+
+          <div class="panel w5h2" data-panel="err">
+            <header class="panel-hd"><h3>Errors <span class="ph-note">按错误类别分列</span></h3><div class="panel-menu">
+              <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
+              <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+            </div></header>
+            <div class="panel-bd"><div class="chart" id="ch-err"></div></div>
+          </div>
+          <div class="panel w7h2" data-panel="cmp">
+            <header class="panel-hd"><h3>Comparison <span id="cmpLegend" class="ph-note"></span></h3><div class="panel-menu">
+              <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
+              <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+            </div></header>
+            <div class="panel-bd"><div class="chart" id="ch-cmp"></div></div>
+          </div>
+        </section>
+
+        <section class="panel bottom-panel" data-panel="bp-perf">
+          <header class="panel-hd tabs-hd">
+            <div class="tabs">
+              <button class="on" data-tab="runs">Runs</button>
+              <button data-tab="req">Requests</button>
+              <button data-tab="cmp">Compare</button>
+              <button data-tab="log">Log</button>
+            </div>
+            <div class="panel-menu toolbar-inline">
+              <input id="runsSearch" class="mini-input" type="search" aria-label="筛选运行记录" spellcheck="false" placeholder="筛选渠道或模型" />
+              <button id="btnExportCmp" class="ghost mini">导出对比</button>
+            </div>
+          </header>
+          <div class="panel-bd panes">
+            <div class="pane on" id="pane-runs">
+              <div class="timeline" id="runsTimeline" hidden></div>
+              <table class="grid" id="runsTable">
+                <thead><tr>
+                  <th data-sort="target">Channel</th><th data-sort="model">Model</th><th data-sort="status">Status</th>
+                  <th data-sort="total" class="num">Reqs</th><th data-sort="ok" class="num">OK</th>
+                  <th data-sort="p95" class="num">E2EL P95</th><th data-sort="ttft" class="num">TTFT</th><th data-sort="tpot" class="num">TPOT</th><th data-sort="tps" class="num">Output tok/s</th>
+                  <th class="act">Actions</th>
+                </tr></thead>
+                <tbody id="runsBody"></tbody>
+              </table>
+            </div>
+          <div class="pane" id="pane-req">
+            <div class="toolbar-inline" style="margin-bottom:6px">
+              <label class="switch" style="margin:0"><input type="checkbox" id="reqOnlyFail" />只看失败</label>
+              <select id="reqErrClass" class="mini-select"><option value="">全部错误类</option></select>
+              <input id="reqSearch" class="mini-input" type="search" aria-label="筛选错误原文" spellcheck="false" placeholder="搜索错误原文" />
+              <button id="btnExportReq" class="ghost mini">导出当前筛选</button>
+              <span class="hint" id="reqCount"></span>
+            </div>
+            <table class="grid" id="reqTable">
+              <thead><tr>
+                <th class="num">seq</th><th class="num">status</th><th>class</th>
+                <th class="num">TTFT</th><th class="num">E2EL</th><th class="num">TPOT</th>
+                <th class="num">in/out</th><th class="num">cache</th><th>detail</th>
+              </tr></thead>
+              <tbody id="reqBody"></tbody>
+            </table>
+          </div>
+          <div class="pane" id="pane-cmp">
+            <table class="grid" id="cmpTable"><thead></thead><tbody></tbody></table>
+              <div class="hint">每列最优值标绿、最差值标红。点某行的「主视图」即可让上方图表切到该渠道。</div>
+            </div>
+            <div class="pane" id="pane-log"><div class="log" id="log"></div></div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- 降智检测 -->
+    <div id="view-bench" class="view" hidden>
+      <div id="b-verdict" class="verdict"></div>
+      <section class="panel-grid bench-grid">
+        <div class="panel w6h2" data-panel="dims">
+          <header class="panel-hd"><h3>各维度得分</h3><div class="panel-menu">
+            <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
+            <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+          </div></header>
+          <div class="panel-bd"><div class="chart" id="b-ch-dims"></div></div>
+        </div>
+        <div class="panel w6h2" data-panel="trend">
+          <header class="panel-hd"><h3>总分趋势 <span class="ph-note">同一渠道多次检测</span></h3><div class="panel-menu">
+            <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
+            <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+          </div></header>
+          <div class="panel-bd"><div class="chart" id="b-ch-trend"></div></div>
+        </div>
+      </section>
+
+      <section class="panel bottom-panel" data-panel="bp-bench">
+          <header class="panel-hd tabs-hd">
+            <div class="tabs">
+              <button class="on" data-tab="items">逐题结果</button>
+            <button data-tab="hist">历史记录</button>
+          </div>
+          <div class="panel-menu toolbar-inline">
+            <input id="benchSearch" class="mini-input" type="search" aria-label="筛选逐题结果" spellcheck="false" placeholder="筛选题号或维度" />
+          </div>
+        </header>
+        <div class="panel-bd panes">
+          <div class="pane on" id="b-pane-items">
+            <table class="grid"><thead><tr><th>Dimension</th><th>Item</th><th>Result</th><th class="num">Latency</th><th>Grading</th><th>Model output</th></tr></thead><tbody id="b-itemsBody"></tbody></table>
+          </div>
+          <div class="pane" id="b-pane-hist">
+            <table class="grid"><thead><tr><th>时间</th><th>模型</th><th>渠道</th><th class="num">总分</th><th>指纹</th><th>状态</th><th class="act">操作</th></tr></thead><tbody id="b-histBody"></tbody></table>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="drawer" id="drawer" hidden>
+  <div class="drawer-hd"><h3 id="drawerTitle">运行详情</h3><button class="mini ghost" id="drawerClose">关闭</button></div>
+  <div class="drawer-bd" id="drawerBody"></div>
+</div>
+<div class="drawer-mask" id="drawerMask" hidden></div>
+
+<div class="modal" id="modal" hidden>
+  <div class="box">
+    <div class="hd"><h3 id="modalTitle">探活测速</h3><button class="mini ghost" id="modalClose">关闭</button></div>
+    <div class="bd" id="modalBody"></div>
+  </div>
+</div>
+
+<div class="modal palette" id="palette" hidden>
+  <div class="box">
+    <div class="palette-input"><input id="paletteInput" type="text" role="combobox" aria-expanded="true" aria-controls="paletteList" aria-label="命令面板" spellcheck="false" placeholder="输入命令，或搜索运行与渠道…　↑↓ 选择　Enter 执行" /></div>
+    <div class="palette-list" id="paletteList" role="listbox" aria-label="命令与运行"></div>
+  </div>
+</div>
+
+<div class="modal confirm" id="confirm" hidden>
+  <div class="box small">
+    <div class="hd"><h3 id="confirmTitle">确认操作</h3></div>
+    <div class="bd"><p id="confirmMsg"></p>
+      <div class="btnrow" style="justify-content:flex-end">
+        <button id="confirmNo" class="ghost">取消</button>
+        <button id="confirmYes" class="danger">确认</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
+
+<script>
+  (function () {
+    function switchView(view) {
+      document.querySelectorAll('.rail-item[data-view]').forEach(a => a.classList.toggle('on', a.dataset.view === view));
+      document.getElementById('side-perf').hidden = view !== 'perf';
+      document.getElementById('side-bench').hidden = view !== 'bench';
+      document.getElementById('side-actions-perf').hidden = view !== 'perf';
+      document.getElementById('side-actions-bench').hidden = view !== 'bench';
+      document.getElementById('view-perf').hidden = view !== 'perf';
+      document.getElementById('view-bench').hidden = view !== 'bench';
+      document.getElementById('crumbTitle').textContent = view === 'perf' ? '性能压测' : '降智检测';
+      document.querySelectorAll('.perfonly').forEach(e => e.hidden = view !== 'perf');
+      document.querySelectorAll('.benchonly').forEach(e => e.hidden = view !== 'bench');
+      window.dispatchEvent(new CustomEvent('viewchange', { detail: { view } }));
+    }
+    document.querySelectorAll('.rail-item[data-view]').forEach(a => {
+      a.addEventListener('click', () => { switchView(a.dataset.view); history.replaceState(null, '', a.dataset.view === 'perf' ? '/' : '#bench'); });
+    });
+    window.addEventListener('hashchange', () => switchView(location.hash === '#bench' ? 'bench' : 'perf'));
+    window.__switchView = switchView;
+    if (location.hash === '#bench') switchView('bench');
+    const bm = document.querySelector('meta[name="build"]');
+    const rb = document.getElementById('railBuild');
+    if (bm && rb) rb.textContent = 'build ' + bm.content.slice(0, 7);
+  })();
+</script>
+<script src="/static/glass-hero.js?v=__BUILD__"></script>
+<script src="/static/ui.js?v=__BUILD__"></script>
+<script src="/static/app.js?v=__BUILD__"></script>
+<script src="/static/bench.js?v=__BUILD__"></script>
+</body>
+</html>
