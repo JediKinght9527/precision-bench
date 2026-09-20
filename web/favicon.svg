@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#0a0b0f"/>
+  <defs>
+    <mask id="face">
+      <rect width="64" height="64" fill="#fff"/>
+      <circle cx="25" cy="31" r="3.2" fill="#000"/>
+      <circle cx="39" cy="31" r="3.2" fill="#000"/>
+      <rect x="31.2" y="45.5" width="1.6" height="10" fill="#000"/>
+    </mask>
+  </defs>
+  <g mask="url(#face)" fill="#57e389">
+    <circle cx="32" cy="35" r="18"/>
+    <circle cx="17.5" cy="17.5" r="5.5"/>
+    <circle cx="46.5" cy="17.5" r="5.5"/>
+    <rect x="27.5" y="45.5" width="9" height="12" rx="3"/>
+  </g>
+</svg>
