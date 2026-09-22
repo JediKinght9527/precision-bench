@@ -498,7 +498,7 @@ vLLM / SGLang benchmark（源码级核对见 §12）、Grafana / status-page 呈
 ### Logo 与品牌（2026-09-19）
 
 - **海狸徽标**：剪影构成 = 圆脸 + 双耳 + 龅牙，`<mask>` 挖出眼点与牙缝（小尺寸最清晰）。
-  `rail-logo` 为 36px 玻璃圆角砖（信号绿海狸），`favicon.svg` 同构放大版（深底 #0a0b0f + 亮绿 #57e389）。
+  `rail-logo` 为 36px 玻璃圆角砖（黄铜海狸），`favicon.svg` 同构放大版（暖黑底 #0a0908 + 黄铜 #f0c56e）。
 - 改徽标必须同步 `web/favicon.svg` 与 `index.html` 的 `rail-logo` SVG，两处同构。
 
 ### 对照后待办（按价值排序）
