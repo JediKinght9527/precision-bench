@@ -172,12 +172,10 @@ async def api_run(run_id: str):
         )
         status = row["status"]
     return {
-        "run": row,
+        "run": _scrub_row(row),
         "status": status,
         "summary": summary,
-        "target": json.loads(row["params_json"])["targets"][0]
-        if row.get("params_json")
-        else None,
+        "target": _scrub_target(row),
     }
 
 
@@ -325,12 +323,13 @@ async def api_export_json(run_id: str):
     summary = summarize(
         [_row_to_sample(r) for r in rows], _slo_from_row(row or {}), pin, pout, pcache
     )
-    return JSONResponse({"run": row, "summary": summary, "samples": rows})
+    return JSONResponse({"run": _scrub_row(row), "summary": summary, "samples": rows})
 
 
 @app.get("/api/schedules")
 async def api_schedules():
-    return {"schedules": await store.list_schedules()}
+    # DB 里 config_json 必须保留 api_key 供调度器加载，仅出口脱敏
+    return {"schedules": [_scrub_row(s) for s in await store.list_schedules()]}
 
 
 @app.post("/api/schedules")
@@ -447,22 +446,6 @@ class ModelsBody(BaseModel):
     verify_tls: bool = True
 
 
-@app.get("/api/targets/models")
-async def api_models_get(base_url: str, api_key: str = "", provider: str = "openai"):
-    from .schemas import Provider
-
-    try:
-        prov = Provider(provider)
-    except ValueError:
-        prov = Provider.openai
-    t = TargetModel(
-        name="probe", provider=prov, base_url=base_url, api_key=api_key, model=""
-    )
-    async with httpx.AsyncClient(timeout=20, proxy=None) as client:
-        models = await _list_models(client, t)
-    return {"models": models}
-
-
 @app.post("/api/targets/models")
 async def api_models(body: ModelsBody):
     async with httpx.AsyncClient(
@@ -527,7 +510,7 @@ async def api_export_md(run_id: str):
     s = summarize(
         [_row_to_sample(r) for r in rows], _slo_from_row(row), pin, pout, pcache
     )
-    tgt = json.loads(row["params_json"])["targets"][0] if row.get("params_json") else {}
+    tgt = _scrub_target(row) or {}
     md = _to_markdown(row, tgt, s)
     return StreamingResponse(
         iter([md]),
@@ -841,6 +824,48 @@ def _slo_from_row(row: dict) -> SLO:
         return SLO(**json.loads(row.get("slo_json") or "{}"))
     except Exception:
         return SLO()
+
+
+def _scrub_secrets(obj):
+    """递归剔除 api_key（防历史数据/异常嵌套再出口泄露）。"""
+    if isinstance(obj, dict):
+        return {k: _scrub_secrets(v) for k, v in obj.items() if k != "api_key"}
+    if isinstance(obj, list):
+        return [_scrub_secrets(x) for x in obj]
+    return obj
+
+
+def _scrub_json_str(s: str | None) -> str | None:
+    if not s:
+        return s
+    try:
+        return json.dumps(_scrub_secrets(json.loads(s)), ensure_ascii=False)
+    except Exception:
+        return s
+
+
+def _scrub_row(row: dict | None) -> dict | None:
+    if not row:
+        return row
+    out = dict(row)
+    if "params_json" in out:
+        out["params_json"] = _scrub_json_str(out.get("params_json"))
+    if "config_json" in out:
+        out["config_json"] = _scrub_json_str(out.get("config_json"))
+    return out
+
+
+def _scrub_target(row: dict | None) -> dict | None:
+    if not row or not row.get("params_json"):
+        return None
+    try:
+        tgt = json.loads(row["params_json"])["targets"][0]
+    except Exception:
+        return None
+    if not isinstance(tgt, dict):
+        return None
+    scrubbed = _scrub_secrets(tgt)
+    return scrubbed if isinstance(scrubbed, dict) else None
 
 
 def _price_from_row(row: dict) -> tuple[float, float, float]:

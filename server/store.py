@@ -124,6 +124,28 @@ class Store:
         except Exception:
             pass  # 迁移失败不能拖垮服务启动
 
+        # H1 止血：历史 runs.params_json 曾整存含 api_key 的完整配置，
+        # 启动时幂等清洗（commit 由 init() 统一提交）。
+        try:
+            async with self._db.execute(
+                "SELECT run_id, params_json FROM runs WHERE params_json LIKE '%api_key%'"
+            ) as cur:
+                rows = await cur.fetchall()
+            for run_id, pj in rows:
+                try:
+                    cfg = json.loads(pj)
+                    scrubbed = _cfg_json_safe(cfg)
+                except Exception:
+                    continue
+                if scrubbed == cfg:
+                    continue
+                await self._db.execute(
+                    "UPDATE runs SET params_json=? WHERE run_id=?",
+                    (json.dumps(scrubbed, ensure_ascii=False), run_id),
+                )
+        except Exception:
+            pass  # 清洗失败不能拖垮服务启动
+
         for table, cols in _expected_columns().items():
             try:
                 async with self._db.execute(f"PRAGMA table_info({table})") as cur:
@@ -237,7 +259,7 @@ class Store:
                 t.provider.value,
                 _mask(t.base_url),
                 t.model,
-                cfg.model_dump_json(),
+                json.dumps(_cfg_json_safe(cfg.model_dump()), ensure_ascii=False),
                 cfg.slo.model_dump_json(),
                 schedule_cron,
                 time.time(),
@@ -388,9 +410,11 @@ class Store:
                 _mask(target.base_url),
                 target.model,
                 json.dumps(dims),
-                # 仅排除 proxy（代理地址可能含凭据）；api_key 全程不落库
+                # 排除 proxy（可能含凭据）与 api_key（不应出现但防漏）；
+                # 注：api_key 由调用方 Target 持有，正常不进 opts
                 json.dumps(
-                    {k: v for k, v in opts.items() if k != "proxy"}, ensure_ascii=False
+                    {k: v for k, v in opts.items() if k not in ("proxy", "api_key")},
+                    ensure_ascii=False,
                 ),
                 "{}",
                 0.0,
@@ -631,8 +655,23 @@ class Store:
         await self._db.commit()
 
 
+def _cfg_json_safe(cfg: dict) -> dict:
+    """递归剔除 targets[].api_key，供 runs.params_json 落库前脱敏。"""
+    if not isinstance(cfg, dict):
+        return cfg
+    out = dict(cfg)
+    targets = out.get("targets")
+    if isinstance(targets, list):
+        out["targets"] = [
+            {k: v for k, v in t.items() if k != "api_key"} if isinstance(t, dict) else t
+            for t in targets
+        ]
+    return out
+
+
 def _mask(url: str) -> str:
-    return url
+    """剥掉 URL userinfo（user:pass@），host 本身不含密钥。"""
+    return re.sub(r"(?i)^([a-z][a-z0-9+.\-]*://)[^/@\s]+@", r"\1***@", url)
 
 
 _TYPE_RE = re.compile(
