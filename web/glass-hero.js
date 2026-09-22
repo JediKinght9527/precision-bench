@@ -79,13 +79,14 @@
     // bright=true（logo 场景）：给玻璃球一层明亮的可折射内容，球体才像"实心白色玻璃"而非空心环
     const g = ctx.createRadialGradient(w * 0.42, h * 0.30, 0, w * 0.5, h * 0.5, Math.max(w, h) * 0.85);
     if (bright) {
-      g.addColorStop(0, '#c9ccd6');
-      g.addColorStop(0.45, '#5c606c');
-      g.addColorStop(1, '#0c0d11');
+      // 暖调银（呼应黄铜检定仪，冷灰 → 微暖）
+      g.addColorStop(0, '#d6d0c4');
+      g.addColorStop(0.45, '#6a655c');
+      g.addColorStop(1, '#100e0b');
     } else {
-      g.addColorStop(0, '#191920');
-      g.addColorStop(0.55, '#0e0e11');
-      g.addColorStop(1, '#070708');
+      g.addColorStop(0, '#1d1a14');
+      g.addColorStop(0.55, '#12100c');
+      g.addColorStop(1, '#0a0908');
     }
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
@@ -109,9 +110,9 @@
     try { ctx.letterSpacing = `${Math.round(fontSize * -0.022)}px`; } catch (e) { /* 老浏览器忽略 */ }
     const lineH = areaH / n;
     const startY = h * 0.05 + lineH / 2;
-    ctx.shadowColor = 'rgba(255,255,255,.30)';
+    ctx.shadowColor = 'rgba(240,197,110,.28)';
     ctx.shadowBlur = fontSize * 0.20;
-    ctx.fillStyle = '#d7d7da';
+    ctx.fillStyle = '#e8e2d4';
     lines.forEach((ln, i) => ctx.fillText(ln, w / 2, startY + i * lineH));
     return cv;
   }
