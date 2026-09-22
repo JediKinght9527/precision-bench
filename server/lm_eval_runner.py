@@ -198,6 +198,43 @@ def build_cmd(
     return cmd
 
 
+# 用 python -c + LMEVAL_ARGV 启动：api_key 在环境变量里，不进 ps 的 argv
+_LAUNCH_CODE = (
+    "import json, os, sys\n"
+    "from lm_eval.__main__ import cli_evaluate\n"
+    "sys.argv = json.loads(os.environ['LMEVAL_ARGV'])\n"
+    "cli_evaluate()\n"
+)
+
+_CMD_KEY_RE = re.compile(r"api_key=[^,\s\"]+")
+
+
+def _scrub_cmd_text(s: str) -> str:
+    """SSE 展示用：把 model_args 里的 key 打码。"""
+    return _CMD_KEY_RE.sub("api_key=***", s)
+
+
+def scrub_dir(out_dir: Path) -> int:
+    """清洗 result/samples 落盘文件里的 api_key（parse 前必调）。"""
+    n = 0
+    json_re = re.compile(r'("api_key"\s*:\s*")([^"]*)(")')
+    kv_re = re.compile(r"(api_key=)([^,\s\"]+)")
+    for p in list(out_dir.rglob("*.json")) + list(out_dir.rglob("*.jsonl")):
+        try:
+            text = p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        new = json_re.sub(r"\1***\3", text)
+        new = kv_re.sub(r"\1***", new)
+        if new != text:
+            try:
+                p.write_text(new, encoding="utf-8")
+                n += 1
+            except Exception:
+                pass
+    return n
+
+
 def _env() -> dict[str, str]:
     env = dict(os.environ)
     env["HF_ENDPOINT"] = HF_MIRROR  # 国内必须走镜像
@@ -231,14 +268,18 @@ async def run(
             "phase": "lm_eval",
             "state": "starting",
             "tasks": tasks,
-            "cmd": " ".join(cmd[:6]) + " …",
+            "cmd": _scrub_cmd_text(" ".join(cmd[:6]) + " …"),
         }
     )
 
+    env = _env()
+    env["LMEVAL_ARGV"] = json.dumps(cmd, ensure_ascii=False)
     proc = await asyncio.create_subprocess_exec(
-        *cmd,
+        sys.executable,
+        "-c",
+        _LAUNCH_CODE,
         cwd=str(ROOT),
-        env=_env(),
+        env=env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
@@ -296,6 +337,7 @@ async def run(
     if should_stop():
         on_event({"type": "phase", "phase": "lm_eval", "state": "stopped"})
 
+    scrub_dir(out_dir)
     return parse(out_dir, tasks, opts)
 
 

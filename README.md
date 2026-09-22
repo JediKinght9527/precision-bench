@@ -216,6 +216,9 @@ uv run pytest -q
 
 ## 安全
 
-- `api_key` 仅存本地 SQLite；导出/日志不额外泄露。
-- `data/` 已在 `.gitignore` 排除。
+- **api_key 不落库**：`runs.params_json` 写入前剔除 `targets[].api_key`；历史行由启动时 `_migrate` 幂等清洗。
+- **API 出口脱敏**：`GET /api/runs/{id}`、`export.json`、`export.md`、`GET /api/schedules` 递归剔除 `api_key`。`schedules.config_json` 在 DB 保留 key 供调度器加载，仅出口脱敏。
+- **模型列表**：`POST /api/targets/models`（key 走 body）。**无 GET query 版本**（key 不进 URL/浏览器历史/代理日志）。
+- **lm-eval**：key 经 `LMEVAL_ARGV` 环境变量传入子进程（不进 `ps` argv）；SSE `cmd` 展示正则打码；`parse` 前 `scrub_dir` 清洗 result/samples 落盘文件。
+- `base_url` 落库用 `base_url_masked`（`user:pass@` → `***@`）；`data/` 已在 `.gitignore` 排除。
 - 支持每任务独立代理（国内直连 / `http://127.0.0.1:7890`）与 TLS 校验开关。

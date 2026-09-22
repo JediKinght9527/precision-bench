@@ -916,9 +916,10 @@ async function doModels() {
   const out = [];
   for (const t of state.targets) {
     try {
-      const d = await fetchJSON(`/api/targets/models?base_url=${encodeURIComponent(t.base_url)}&api_key=${encodeURIComponent(t.api_key)}&provider=${t.provider}`);
-      out.push(`<h4 style="color:var(--ink);font-size:12px;font-weight:600;margin:10px 0 4px">${esc(t.name)} · ${d.models.length} 个模型</h4>
-        <div class="mono" style="font-size:11px;color:var(--muted);max-height:220px;overflow:auto;border:1px solid var(--rule);border-radius:8px;padding:8px">${d.models.map(esc).join('<br>') || '<span class="hint">无（可能不支持 /v1/models）</span>'}</div>`);
+      const d = await fetchJSON('/api/targets/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targets: [t] }) });
+      const models = (d.models && d.models[t.name]) || [];
+      out.push(`<h4 style="color:var(--ink);font-size:12px;font-weight:600;margin:10px 0 4px">${esc(t.name)} · ${models.length} 个模型</h4>
+        <div class="mono" style="font-size:11px;color:var(--muted);max-height:220px;overflow:auto;border:1px solid var(--rule);border-radius:8px;padding:8px">${models.map(esc).join('<br>') || '<span class="hint">无（可能不支持 /v1/models）</span>'}</div>`);
     } catch (e) { out.push(`<div class="hint">${esc(t.name)}: ${esc(e.message)}</div>`); }
   }
   UI.openModal('模型列表', out.join(''));
