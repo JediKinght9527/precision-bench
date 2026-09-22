@@ -8,14 +8,14 @@
   'use strict';
 
   const C = {
-    tx1: '#f4f5f7', tx2: '#aeb6c2', tx3: '#7b828e',
-    line: 'rgba(255,255,255,.08)', line2: 'rgba(255,255,255,.16)',
-    acc: '#30d158', acc2: '#57e389',
-    ok: '#30d158', warn: '#ffd60a', bad: '#ff453a', info: '#64d2ff',
-    cyan: '#4dd6c4', pink: '#ff6482', purple: '#c792ea', orange: '#ffb340',
-    blue: '#6cb2ff', green: '#30d158', yellow: '#ffd60a', red: '#ff453a',
-    tr1: '#4dd6c4', tr2: '#ff6482', tr3: '#ffb340', tr4: '#6cb2ff', tr5: '#c792ea',
-    series: ['#4dd6c4', '#ff6482', '#ffb340', '#6cb2ff', '#c792ea', '#30d158', '#ffd60a', '#ff453a'],
+    tx1: '#f6f3ee', tx2: '#b0a99e', tx3: '#827b72',
+    line: 'rgba(255,250,240,.085)', line2: 'rgba(255,250,240,.16)',
+    acc: '#e0a84f', acc2: '#f0c56e',
+    ok: '#3dd68c', warn: '#f5b942', bad: '#ff6b5b', info: '#7dd3c8',
+    cyan: '#5ec8b8', pink: '#ff7a8a', purple: '#d4a5e8', orange: '#f0c56e',
+    blue: '#7eb6ff', green: '#3dd68c', yellow: '#f5b942', red: '#ff6b5b',
+    tr1: '#5ec8b8', tr2: '#ff7a8a', tr3: '#f0c56e', tr4: '#7eb6ff', tr5: '#d4a5e8',
+    series: ['#5ec8b8', '#ff7a8a', '#f0c56e', '#7eb6ff', '#d4a5e8', '#3dd68c', '#f5b942', '#ff6b5b'],
   };
 
   const $ = (id) => document.getElementById(id);

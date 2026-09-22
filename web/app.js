@@ -1142,7 +1142,6 @@ UI.setPaletteProvider(() => {
     { label: '探活测速', action: doProbe },
     { label: '拉取模型列表', action: doModels },
     { label: '缓存检测（验证 Prompt Cache）', action: doCacheCheck },
-    { label: '打开玻璃视觉 Demo', action: () => window.open('/static/demo-glass.html', '_blank') },
     { label: '查看指标口径说明', action: showGlossary },
     { label: '暂停当前运行', action: () => control('pause') },
     { label: '停止当前运行', action: () => control('stop') },
