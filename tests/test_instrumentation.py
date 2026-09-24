@@ -25,7 +25,7 @@ def _cfg() -> RunConfig:
 async def test_openai_stream_instrumentation(mock_server):
     target = parse_paste(f"base_url: {mock_server}\napi_key: sk-x\nmodel: gpt-4o")[0]
     assert target.provider == Provider.openai
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
         res = await providers.execute(
             client, target, _cfg(), [{"role": "user", "content": "hi"}], 5
         )
@@ -47,7 +47,7 @@ async def test_anthropic_stream_instrumentation(mock_server):
         f"base_url: {mock_server}\napi_key: sk-ant-x\nmodel: claude-3-5-sonnet"
     )[0]
     assert target.provider == Provider.anthropic
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
         res = await providers.execute(
             client, target, _cfg(), [{"role": "user", "content": "hi"}], 5
         )
@@ -63,7 +63,7 @@ async def test_error_classification(mock_server):
     target = parse_paste(f"base_url: {mock_server}\napi_key: sk-x\nmodel: force-error")[
         0
     ]
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
         res = await providers.execute(
             client, target, _cfg(), [{"role": "user", "content": "hi"}], 5
         )
@@ -77,7 +77,7 @@ async def test_non_stream_fallback(mock_server):
     cfg = _cfg()
     cfg.stream = False
     target = parse_paste(f"base_url: {mock_server}\napi_key: sk-x\nmodel: gpt-4o")[0]
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
         res = await providers.execute(
             client, target, cfg, [{"role": "user", "content": "hi"}], 5
         )

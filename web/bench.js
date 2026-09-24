@@ -88,23 +88,39 @@ function renderTargets() {
         <span class="badge">${esc(t.provider)}</span>
         <button class="chan-x" data-brm="${i}" title="移除">×</button>
       </span>
-      ${t.base_url ? `<span class="chan-url">${esc(t.base_url.replace(/^https?:\/\//, ''))}</span>` : '<span class="chan-warn">待填地址</span>'}
+      ${t.base_url ? `<span class="chan-url" title="${esc(t.base_url)}">${esc(t.base_url.replace(/^https?:\/\//, ''))}</span>` : `<button type="button" class="chan-warn" data-bfillurl="${i}" title="点击补填 base_url">待填地址</button>`}
       ${t.api_key ? `<span class="chan-key">${esc(maskKey(t.api_key))}</span>` : '<span class="chan-warn">缺少密钥</span>'}
     </div>`).join('') || '<div class="hint">还没识别到渠道。贴入配置后点「识别配置」。</div>';
 }
 async function doParse() {
   const text = $('b-paste').value.trim();
-  if (!text) return;
+  if (!text) { UI.toast('先粘贴供应商配置（地址 / 密钥 / 模型）', 'warn'); $('b-paste').focus(); return; }
+  const btn = $('btnBenchParse');
+  UI.setBusy(btn, true, '识别中…');
   try {
     const d = await fetchJSON('/api/parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
     state.targets = d.targets;
     renderTargets();
     UI.toast(d.targets.length ? `识别到 ${d.targets.length} 个渠道` : '没识别出渠道，检查一下粘贴内容', d.targets.length ? 'ok' : 'warn');
   } catch (e) { UI.toast('识别失败: ' + e.message, 'err'); }
+  finally { UI.setBusy(btn, false); }
 }
 document.addEventListener('click', (e) => {
   const rm = e.target.closest('button[data-brm]');
-  if (rm) { state.targets.splice(Number(rm.dataset.brm), 1); renderTargets(); }
+  if (rm) { state.targets.splice(Number(rm.dataset.brm), 1); renderTargets(); return; }
+  const fu = e.target.closest('button[data-bfillurl]');
+  if (fu) {
+    const i = Number(fu.dataset.bfillurl);
+    const cur = state.targets[i];
+    if (!cur) return;
+    const url = prompt('补填 base_url（完整接口地址，如 https://api.example.com/v1）', cur.base_url || 'https://');
+    if (url == null) return;
+    const u = url.trim();
+    if (!u) return;
+    state.targets[i] = { ...cur, base_url: u };
+    renderTargets();
+    UI.toast('已更新 base_url', 'ok');
+  }
 });
 
 /* ---------- 运行 ---------- */
@@ -130,31 +146,58 @@ function buildBody() {
   return body;
 }
 async function startRun() {
-  if (!state.targets.length) { await doParse(); if (!state.targets.length) { UI.toast('请先解析供应商配置', 'warn'); return; } }
+  if (!state.targets.length) { await doParse(); if (!state.targets.length) { UI.toast('请先粘贴配置并点「识别配置」', 'warn'); return; } }
   if (!state.selected.size) { UI.toast('请至少选择一个维度', 'warn'); return; }
   if (!state.targets.filter((t) => t.base_url).length) { UI.toast('还没有可用地址，请补上 base_url 后再检测', 'warn'); return; }
-  $('btnBenchRun').disabled = true;
+  const btn = $('btnBenchRun');
+  UI.setBusy(btn, true, '启动中…');
   try {
     const d = await fetchJSON('/api/bench/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildBody()) });
     state.current = d.run_ids[0];
     $('b-itemsBody').innerHTML = '';
+    $('b-progress').textContent = '0/0';
     renderVerdict({ verdict: 'running' }); ensureCharts(); UI.noData($('b-ch-dims'), 'No data'); UI.noData($('b-ch-trend'));
     UI.toast('降智检测已启动', 'ok');
     connectSSE(state.current);
   } catch (e) { UI.toast('启动失败: ' + e.message, 'err'); }
-  finally { $('btnBenchRun').disabled = false; }
+  finally { UI.setBusy(btn, false); }
 }
+window.__benchStart = startRun;
 function connectSSE(rid) {
   const es = new EventSource(`/api/bench/runs/${rid}/stream`);
+  es.onopen = () => {
+    const el = $('b-progress');
+    // HTML 默认是 "0/0"：仅在尚未收到 progress 时才显示「连接中…」
+    if (!el.dataset.got) el.textContent = '连接中…';
+  };
   es.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
     if (m.type === 'item') addItem(m.data);
-    else if (m.type === 'progress') { $('b-progress').textContent = `${m.done}/${m.total}`; $('b-passed').textContent = m.ok; }
+    else if (m.type === 'progress') {
+      const el = $('b-progress');
+      el.dataset.got = '1';
+      el.textContent = `${m.done}/${m.total}`;
+      $('b-passed').textContent = m.ok;
+    }
     else if (m.type === 'summary') { renderSummary(m.data); es.close(); loadHistory(); UI.toast('降智检测完成', 'ok'); }
-    else if (m.type === 'status' && ['done', 'error', 'stopped'].includes(m.status)) es.close();
-    else if (m.type === 'error') { renderVerdict({ verdict: 'error', note: m.message }); UI.toast('检测出错: ' + m.message, 'err'); }
+    else if (m.type === 'status') {
+      if (['done', 'error', 'stopped'].includes(m.status)) {
+        if (m.status !== 'done') renderVerdict({ verdict: 'error', note: m.status === 'stopped' ? '已停止' : '出错' });
+        es.close();
+      }
+    } else if (m.type === 'error') { renderVerdict({ verdict: 'error', note: m.message }); UI.toast('检测出错: ' + m.message, 'err'); es.close(); }
   };
-  es.onerror = () => es.close();
+  // 可见重连提示：不让 EventSource 静默死亡（原实现直接 close 屏蔽自动重连）
+  es.onerror = () => {
+    if (es.readyState === EventSource.CLOSED) {
+      renderVerdict({ verdict: 'error', note: '连接中断，无法自动重连' });
+      UI.toast('检测连接中断', 'err');
+    } else {
+      // 重连时保留已有进度数字，只在从未收到 progress 时提示文案
+      const el = $('b-progress');
+      if (!el.dataset.got) el.textContent = '重连中…';
+    }
+  };
 }
 function addItem(d) {
   const tr = document.createElement('tr');
@@ -163,8 +206,10 @@ function addItem(d) {
     <td class="num">${d.latency_ms ? Math.round(d.latency_ms) + ' ms' : '–'}</td>
     <td class="dimtxt">${esc(d.detail || '')}</td>
     <td class="got">${esc(d.got || '')}</td>`;
-  $('b-itemsBody').appendChild(tr);
-  while ($('b-itemsBody').childElementCount > 300) $('b-itemsBody').removeChild($('b-itemsBody').firstChild);
+  const body = $('b-itemsBody');
+  body.appendChild(tr);
+  while (body.childElementCount > 300) body.removeChild(body.firstChild);
+  tr.scrollIntoView({ block: 'nearest' });
 }
 
 /* ---------- 结果渲染 ---------- */
@@ -179,7 +224,7 @@ function renderVerdict(s) {
   const c = s.comparison || s;
   const map = {
     idle: ['待检测', '', '粘贴供应商配置、选择维度后开始；首次运行自动建立基线'],
-    running: ['运行中', 'r', '正在逐题检测…'],
+    running: ['运行中', 'acc', '正在逐题检测…'],
     baseline: ['基线已建立', 'b', '已记录为基线，下次检测将与之对比'],
     normal: ['正常', 'g', '与基线相比无显著变化'],
     suspect: ['疑似降智', 'x', '总分或关键维度显著下降'],
@@ -201,6 +246,7 @@ function renderVerdict(s) {
   if (c.n_paired) extra.push(`配对题数 ${c.n_paired}`);
   if (c.fingerprint_changed) extra.push('指纹变化 ⚠');
   if (c.flag_dims && c.flag_dims.length) extra.push('下降维度: ' + c.flag_dims.join(', '));
+  if (s.consistency_match != null) extra.push(`自洽 ${(s.consistency_match * 100).toFixed(0)}%`);
   const el = $('b-verdict');
   el.className = `verdict ${cls}`;
   const right = v === 'idle' ? '' : `<div class="vright"><div class="vscore">${total}</div><div class="vdelta ${c.delta < 0 ? 'down' : c.delta > 0 ? 'up' : ''}">${delta}</div></div>`;
@@ -258,7 +304,7 @@ function renderTrend(s) {
 
   // 最新点单独放大标注，其余点按常规大小
   const data = pts.map((v, i) => (i === last
-    ? { value: v, symbolSize: 12, itemStyle: { color: C.tr4, borderColor: '#0f141b', borderWidth: 3 } }
+    ? { value: v, symbolSize: 12, itemStyle: { color: C.tr4, borderColor: C.bg0, borderWidth: 3 } }
     : v));
 
   trendChart.setOption(UI.base({
@@ -281,7 +327,7 @@ function renderTrend(s) {
       name: '总分', type: 'line', smooth: 0.35, symbol: 'circle', symbolSize: 7,
       data,
       lineStyle: { color: C.tr4, width: 2, cap: 'round', join: 'round', shadowColor: C.tr4, shadowBlur: 10 },
-      itemStyle: { color: C.tr4, borderColor: '#0f141b', borderWidth: 2 },
+      itemStyle: { color: C.tr4, borderColor: C.bg0, borderWidth: 2 },
       areaStyle: { color: UI.grad(C.tr4, .16, 0) },
       // 基线参考线：一眼看出"比基线高还是低"
       markLine: base != null ? {
@@ -293,7 +339,7 @@ function renderTrend(s) {
       // 极值标注
       markPoint: pts.length > 1 ? {
         symbol: 'pin', symbolSize: 34,
-        itemStyle: { color: 'rgba(143,184,224,.18)', borderColor: C.tr4, borderWidth: 1 },
+        itemStyle: { color: UI.hexA(C.tr4, .18), borderColor: C.tr4, borderWidth: 1 },
         label: { color: C.tx1, fontSize: 10, formatter: (x) => `${x.value}%` },
         data: [{ type: 'max', name: '最高' }, { type: 'min', name: '最低' }],
       } : undefined,
@@ -328,15 +374,25 @@ function renderHist() {
       </td></tr>`).join('') || '<tr><td colspan="7" class="hint">暂无记录</td></tr>';
 }
 async function viewing(id) {
-  const d = await fetchJSON(`/api/bench/runs/${id}`);
-  state.current = id;
-  renderSummary(d.run.scores || {});
-  $('b-itemsBody').innerHTML = d.items.map((it) => `<tr>
+  const body = $('b-itemsBody');
+  body.innerHTML = '<tr><td colspan="6" class="hint">加载中…</td></tr>';
+  try {
+    const d = await fetchJSON(`/api/bench/runs/${id}`);
+    state.current = id;
+    renderSummary(d.run.scores || {});
+    const rows = d.items.map((it) => `<tr>
     <td>${esc(it.dim)}</td><td class="mono">${esc(it.item_id)}</td>
     <td><span class="badge ${it.passed ? 'ok' : 'no'}">${it.passed ? 'PASS' : 'FAIL'}</span></td>
     <td class="num">${it.latency_ms ? Math.round(it.latency_ms) + ' ms' : '–'}</td>
     <td class="dimtxt">${esc(it.detail || '')}</td>
-    <td class="got">${esc(it.got || '')}</td></tr>`).join('');
+    <td class="got">${esc(it.got || '')}</td></tr>`);
+    // 与实时 addItem 同上限：lm_eval 千行直接 innerHTML 会卡死
+    body.innerHTML = rows.slice(0, 300).join('') || '<tr><td colspan="6" class="hint">暂无条目</td></tr>';
+    if (rows.length > 300) body.insertAdjacentHTML('beforeend', `<tr><td colspan="6" class="hint">仅显示前 300 条，共 ${rows.length} 条</td></tr>`);
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="6" class="hint">加载失败：${esc(e.message)}</td></tr>`;
+    UI.toast('加载详情失败: ' + e.message, 'err');
+  }
 }
 document.addEventListener('click', async (e) => {
   const b = e.target.closest('button[data-bact]');

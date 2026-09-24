@@ -3,12 +3,11 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="theme-color" content="#0a0908" />
+<meta name="theme-color" content="#000000" />
 <meta name="build" content="__BUILD__" />
 <title>LLM Bench · 中转 API 性能 / 降智检测</title>
 <link rel="icon" href="/static/favicon.svg" />
 <link rel="stylesheet" href="/static/style.css?v=__BUILD__" />
-<script src="/static/echarts.min.js?v=__BUILD__"></script>
 </head>
 <body>
 <div id="app">
@@ -16,21 +15,7 @@
   <nav class="rail">
     <div class="rail-brand">
       <div class="rail-logo" title="LLM Bench">
-        <canvas id="logoScene" aria-hidden="true"></canvas>
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <defs><mask id="beaver-face">
-            <rect width="24" height="24" fill="#fff"/>
-            <circle cx="9.4" cy="11.6" r="1.15" fill="#000"/>
-            <circle cx="14.6" cy="11.6" r="1.15" fill="#000"/>
-            <rect x="11.7" y="17.1" width="0.6" height="3.8" fill="#000"/>
-          </mask></defs>
-          <g mask="url(#beaver-face)" fill="currentColor">
-            <circle cx="12" cy="13.2" r="7"/>
-            <circle cx="6.6" cy="6.6" r="2.2"/>
-            <circle cx="17.4" cy="6.6" r="2.2"/>
-            <rect x="10.4" y="17.1" width="3.2" height="4.6" rx="1.2"/>
-          </g>
-        </svg>
+        <img class="rail-logo-img" src="/static/logo-rail.png" width="21" height="21" alt="" />
       </div>
       <div class="rail-brand-tx"><b>LLM Bench</b><span>中转 API 检定台</span></div>
     </div>
@@ -275,12 +260,12 @@
             <button id="btnPause">暂停</button>
             <button id="btnStop" class="danger">停止</button>
           </div>
-          <div class="hint"><kbd>⌘Enter</kbd> 开始　<kbd>⌘K</kbd> 识别　<kbd>⌘B</kbd> 收起</div>
+          <div class="hint"><kbd>⌘Enter</kbd> 开始　<kbd>⌘K</kbd> 命令面板　<kbd>⌘B</kbd> 收起</div>
         </div>
         <div id="side-actions-bench" hidden>
           <button id="btnBenchRun" class="primary block">开始检测</button>
           <div class="row" style="margin-top:6px"><button id="btnBenchStop" class="danger">停止</button></div>
-          <div class="hint">同一渠道与模型首次运行会自动记为基线，之后每次都与它对比。</div>
+          <div class="hint">同一渠道与模型首次运行会自动记为基线，之后每次都与它对比。<br /><kbd>⌘Enter</kbd> 开始　<kbd>⌘K</kbd> 命令面板　<kbd>⌘B</kbd> 收起</div>
         </div>
       </div>
     </div>
@@ -344,9 +329,14 @@
       <div id="perfDash" class="dash" hidden>
         <section class="summary">
           <div class="verdict-block" id="verdictBlock">
-            <div class="vb-state" id="vbState">等待运行</div>
-            <div class="vb-label">E2EL P95</div>
-            <div class="vb-num" id="vbNum">—<span id="vbUnit">ms</span></div>
+            <div class="vb-hud">
+              <div class="vb-ring" id="vbRing" style="--score:0"><b id="vbScore">–</b><span>SCORE</span></div>
+              <div class="vb-hud-tx">
+                <div class="vb-state" id="vbState">等待运行</div>
+                <div class="vb-label">E2EL P95</div>
+                <div class="vb-num" id="vbNum">—<span id="vbUnit">ms</span></div>
+              </div>
+            </div>
             <div class="vb-sub" id="vbSub">粘贴渠道配置并开始测试</div>
             <div class="vb-slo" id="vbSlo"></div>
             <div class="ticks" id="vbTicks"></div>
@@ -451,7 +441,7 @@
               <select id="reqErrClass" class="mini-select"><option value="">全部错误类</option></select>
               <input id="reqSearch" class="mini-input" type="search" aria-label="筛选错误原文" spellcheck="false" placeholder="搜索错误原文" />
               <button id="btnExportReq" class="ghost mini">导出当前筛选</button>
-              <span class="hint" id="reqCount"></span>
+              <span class="hint" id="reqHint"></span>
             </div>
             <table class="grid" id="reqTable">
               <thead><tr>
@@ -515,27 +505,27 @@
   </main>
 </div>
 
-<div class="drawer" id="drawer" hidden>
+<div class="drawer" id="drawer" hidden role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
   <div class="drawer-hd"><h3 id="drawerTitle">运行详情</h3><button class="mini ghost" id="drawerClose">关闭</button></div>
   <div class="drawer-bd" id="drawerBody"></div>
 </div>
 <div class="drawer-mask" id="drawerMask" hidden></div>
 
-<div class="modal" id="modal" hidden>
+<div class="modal" id="modal" hidden role="dialog" aria-modal="true" aria-labelledby="modalTitle">
   <div class="box">
     <div class="hd"><h3 id="modalTitle">探活测速</h3><button class="mini ghost" id="modalClose">关闭</button></div>
     <div class="bd" id="modalBody"></div>
   </div>
 </div>
 
-<div class="modal palette" id="palette" hidden>
+<div class="modal palette" id="palette" hidden role="dialog" aria-modal="true" aria-label="命令面板">
   <div class="box">
     <div class="palette-input"><input id="paletteInput" type="text" role="combobox" aria-expanded="true" aria-controls="paletteList" aria-label="命令面板" spellcheck="false" placeholder="输入命令，或搜索运行与渠道…　↑↓ 选择　Enter 执行" /></div>
     <div class="palette-list" id="paletteList" role="listbox" aria-label="命令与运行"></div>
   </div>
 </div>
 
-<div class="modal confirm" id="confirm" hidden>
+<div class="modal confirm" id="confirm" hidden role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMsg">
   <div class="box small">
     <div class="hd"><h3 id="confirmTitle">确认操作</h3></div>
     <div class="bd"><p id="confirmMsg"></p>
@@ -575,7 +565,7 @@
     if (bm && rb) rb.textContent = 'build ' + bm.content.slice(0, 7);
   })();
 </script>
-<script src="/static/glass-hero.js?v=__BUILD__"></script>
+<script src="/static/echarts.min.js?v=__BUILD__"></script>
 <script src="/static/ui.js?v=__BUILD__"></script>
 <script src="/static/app.js?v=__BUILD__"></script>
 <script src="/static/bench.js?v=__BUILD__"></script>

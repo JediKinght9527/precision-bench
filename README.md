@@ -3,7 +3,7 @@
 第三方 **LLM 中转 API** 性能 / 稳定性测试平台。粘贴供应商给的 `base_url + api_key + model` 即可测，**不打分**，只输出可复算的原始指标与深色波形图。
 
 - 协议：**OpenAI 兼容** + **Anthropic Messages**
-- 形态：本地服务 + **黄铜检定仪**仪表盘（暖黑机箱、烟色毛玻璃、黄铜强调、巨型判定读数；ECharts 本地化，零外网依赖）
+- 形态：本地服务 + **NVIDIA 式企业深色检定台**（纯黑底 + `#76B900` 标志绿 CTA + 健康分环 + 绿系波形；ECharts 本地化，零外网依赖）
 - 模式：并发（closed-loop）/ 定频（open-loop，**含 coordinated omission 修正**）/ 时长（长时稳定性）
 - 批量：多个供应商一键横评叠加；定时巡检 + Webhook/飞书告警
 - 存储：SQLite（WAL），长跑持久化、断线可恢复
@@ -19,16 +19,16 @@
 | 场景化流量 | 输入长度分布（固定/均匀/正态）、max_tokens、temperature |
 | 反识别 | prompt 随机化 + 长度可变 + 定时抖动，降低被供应商识别优待 |
 | 8 张波形图 | E2E 分位包络、TTFT、TPOT、吞吐、延迟热力图、错误时间轴、分布+CDF、多供应商横评 |
-| 指标卡 | 请求/成功率/Goodput/RPS/延迟分位/吞吐/**成本**，带实时 sparkline |
+| 指标卡 | 请求/成功率/Goodput/RPS/延迟分位/吞吐/**成本**（阈值着色对齐侧栏合格线） |
 | SLO 徽章 | 判定块下四枚徽章（成功率/TTFT/TPOT/E2EL）逐项对着合格线着色：达标绿、偏慢黄、超线红、不可测灰（语义状态色） |
-| 对比表 | 多供应商横向对比，最优黄铜高亮/最差红，一眼看出差距 |
+| 对比表 | 多供应商横向对比，最优绿高亮/最差红，一眼看出差距 |
 | 实时日志 | 失败样本、运行事件、探活结果滚动输出 |
 | 历史恢复 | 刷新/重启后自动载入最近 8 条运行，图表续看 |
 | 导出 | CSV 原始样本 / JSON 汇总 / **Markdown 报告** |
 | 定时巡检 | cron 周期任务；告警规则（成功率、延迟、连续失败）+ 飞书/Webhook |
 | 成本估算 | 填 输入/输出 ¥每百万 token，自动算每请求与总额 |
 | 桌面通知 | 运行结束浏览器通知 |
-| 快捷键 | `⌘/Ctrl+Enter` 开始 · `⌘/Ctrl+K` 解析 |
+| 快捷键 | `⌘/Ctrl+Enter` 开始（跟当前视图：压测/降智） · `⌘/Ctrl+K` 命令面板 · `⌘/Ctrl+B` 收起侧栏 |
 | 缓存指标 | 兼容 OpenAI / Anthropic / DeepSeek / Kimi 四种结构；报命中率与**命中 vs 未命中的 TTFT 对比** |
 | 缓存检测 | 同一长前缀串行 N 次主动验证：揪出「上报命中但不加速」的假缓存；判定 有效/疑似假缓存/未上报；历史 + 基线对比 |
 | 指标口径 | 顶栏 `?` 一键查看全部指标定义 |
@@ -39,7 +39,7 @@
 
 ## 界面
 
-单页仪表盘，左侧展开式导航（172px 海狸徽标，`≤1080px` 自动折叠为图标条）切换两个视图（`/` 处；`/bench` 重定向到 `/#bench`）：
+单页仪表盘，左侧展开式导航（172px 海狸徽标，`≤1180px` 收窄 / `≤980px` 自动折叠为图标条）切换两个视图（`/` 处；`/bench` 重定向到 `/#bench`）：
 
 | 视图 | 用途 |
 |---|---|
@@ -50,7 +50,7 @@
 - **仪表盘栅格**：主次分明——E2E 主图占 8×2 大位，TTFT/TPOT 右侧堆叠，吞吐/分布、热力/错误按 8+4 配对，横评通栏；面板随窗口自适应（ResizeObserver）
 - **首屏空态**：无运行时显示引导卡（打开配置 / 填入示例），不再是空白图表墙
 - **面板化**：每张图表是独立面板，hover 出现菜单（全屏 / 导出 PNG），空数据居中显示 No data（无错误时显示「无错误」）
-- **Stat 面板**：单行等高对齐，大数值 + 单位 + sparkline + 阈值配色（超阈变红/黄）
+- **Stat 面板**：单行等高对齐，大数值 + 单位 + 阈值配色（超阈变红/黄，阈值对齐侧栏合格线）
 - **顶栏**：时间范围、自动刷新、服务状态、实时时钟、命令面板
 - **表格**：粘性表头、点击列排序、关键字筛选、行点击开运行详情抽屉
 - **命令面板**：`⌘/Ctrl + K` 唤起，可执行命令或跳转运行
@@ -128,7 +128,7 @@
 | TPOT | `(tl − tf)/(N−1)` | 每 token 时间，对齐 vLLM/MLPerf 口径 |
 | ITL | 相邻 chunk 间隔的 mean / P99 | 解码抖动 |
 | 吞吐 | `N/(tl−tf)` tok/s | 纯解码速率 |
-| 分位 | P50/90/95/99/99.9 | **HDR Histogram**（非朴素排序） |
+| 分位 | P50/90/95/99/99.9 | **线性插值**（`np.percentile`，非 HDR——HDR 整数毫秒量化小样本失真） |
 | Goodput | `count(TTFT≤SLO₁ ∧ TPOT≤SLO₂)/total` | SLO 达标吞吐 |
 | corrected | 定频模式下 `到达 − 计划发出时刻` | **CO 修正**，暴露被并发/排队掩盖的尾延迟 |
 
@@ -172,7 +172,7 @@
 
 ```
 server/  main.py(FastAPI+SSE) engine.py(调度/CO) providers.py(双协议打点)
-         parse.py(粘贴解析) metrics.py stats.py(HDR/LTTB) store.py(SQLite)
+         parse.py(粘贴解析) metrics.py stats.py(线性插值/LTTB) store.py(SQLite)
          scheduler.py(定时) notifier.py(告警) schemas.py mock? no → tests/
 web/     index.html app.js style.css echarts.min.js
 tests/   mock_upstream.py + 单测/端到端
@@ -202,6 +202,12 @@ data/    bench.db
 | GET | `/api/bench/runs/{id}/stream` | SSE 逐题进度 |
 | POST | `/api/bench/runs/{id}/baseline` / `/stop` | 设为基线 / 停止 |
 | GET | `/api/bench/baselines` | 已有基线 |
+| POST | `/api/bench/predownload` | 预下载官方数据集 |
+| GET | `/api/health` | 健康检查（服务状态灯）|
+| GET | `/api/runs/{id}/samples` | 原始样本（明细表 / 导出）|
+| POST | `/api/cache/check` | 缓存主动检测（N 轮 miss/hit）|
+| GET | `/api/cache/checks` / `/{id}` | 缓存历史 / 详情 |
+| POST/DELETE | `/api/cache/checks/{id}/baseline` / `/{id}` | 设缓存基线 / 删除 |
 
 ## 测试
 

@@ -12,7 +12,7 @@ import httpx
 
 from . import bench_data
 from .schemas import Provider, Target
-from .store import Store
+from .store import Store, _mask
 
 
 @dataclass
@@ -113,11 +113,16 @@ class BenchManager:
                 pass
 
     def _client(self, opts: dict) -> httpx.AsyncClient:
+        from .providers import is_loopback
+
+        base = opts.get("base_url") or opts.get("url") or ""
+        trust = not is_loopback(base) if base else True
         return httpx.AsyncClient(
             timeout=httpx.Timeout(float(opts.get("timeout_s", 120)), connect=30.0),
             limits=httpx.Limits(max_connections=8),
             proxy=opts.get("proxy") or None,
             verify=bool(opts.get("verify_tls", True)),
+            trust_env=trust and not opts.get("proxy"),
         )
 
     async def _drive(self, st: BenchState) -> None:
@@ -331,11 +336,13 @@ class BenchManager:
         alpha = float(st.opts.get("alpha", 0.05))
         min_delta = float(st.opts.get("min_delta", st.opts.get("threshold", 0.03)))
         task_key = self._task_key(st)
-        base = await self.store.get_baseline(st.target.base_url, st.target.model, task_key)
+        # 基线键统一用 masked URL（与手动「设为基线」api_bench_baseline 一致）
+        key_url = _mask(st.target.base_url)
+        base = await self.store.get_baseline(key_url, st.target.model, task_key)
 
         if not base or base["bench_run_id"] == st.run_id:
             await self.store.set_baseline(
-                st.target.base_url, st.target.model, task_key,
+                key_url, st.target.model, task_key,
                 st.run_id, scores.get("total", 0.0), st.fingerprint,
             )
             return {
