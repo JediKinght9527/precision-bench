@@ -228,6 +228,22 @@ def _endpoint(target: Target, default_path: str) -> str:
     return base + p
 
 
+def is_loopback(url: str) -> bool:
+    """URL 主机是否为本机回环（跳过系统代理，避免 Clash 误截 127.0.0.1）。"""
+    from urllib.parse import urlparse
+
+    try:
+        host = urlparse(url).hostname or ""
+    except Exception:
+        return False
+    return host in ("127.0.0.1", "localhost", "::1")
+
+
+def trust_env_for(url: str) -> bool:
+    """非回环才允许 httpx trust_env（env/system proxy）；回环直连。"""
+    return not is_loopback(url)
+
+
 def _headers(target: Target, provider: Provider) -> dict:
     h: dict[str, str] = {
         "Content-Type": "application/json",

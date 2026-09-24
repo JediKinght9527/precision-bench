@@ -70,7 +70,8 @@ function windowedRate(S, winMs) {
   for (let i = 0; i < n; i++) {
     cnt += 1; tok += S[i].out_tokens || 0;
     while (lo < i && (S[i].ts - S[lo].ts) * 1000 > winMs) { cnt -= 1; tok -= S[lo].out_tokens || 0; lo += 1; }
-    const span = Math.max(0.25, S[i].ts - S[lo].ts);
+    // 下限 1s：几条样本挤在同一秒时 span→0 会把 rps 打成尖刺
+    const span = Math.max(1, S[i].ts - S[lo].ts, winMs / 1000 * 0.5);
     rps[i] = +(cnt / span).toFixed(2);
     tps[i] = +(tok / span).toFixed(1);
   }
@@ -152,19 +153,22 @@ function cacheDisplay(sum) {
 const lat = (s, v, ok, warn) => (s.failed > 0 ? '' : v <= ok ? 'v-ok' : v <= warn ? 'v-warn' : 'v-bad');
 const lv = (s, v) => (s.ok ? fmt(v) : '–');
 // 指标命名对齐 vLLM / SGLang：TTFT / TPOT / ITL / E2EL，字段规律 {stat}_{metric}
-// 第六项是中文释义，用作 hover 提示；完整口径见顶栏「?」里的说明表
-/* 读数区第一行 = 判定依据三要素（口径与判定一致：用 P95）；次级网格按重要性排序 */
+/* 读数区第一行 = 判定依据三要素（口径与判定一致：用 P95 + run.slo）；次级网格按重要性排序 */
+const SLO_DEF = { ttft_ms: 1500, tpot_ms: 50, e2e_ms: 5000 };
+const runSlo = (run) => Object.assign({}, SLO_DEF, (run && run.slo) || {});
+/* 与 evaluate() 同色阶：≤limit 绿，≤1.5×limit 黄，否则红 */
+const latSlo = (s, v, limit) => (s.failed > 0 || limit == null ? '' : v <= limit ? 'v-ok' : v <= limit * 1.5 ? 'v-warn' : 'v-bad');
 const PRIMARY_DEFS = [
   ['Success rate', (s) => pct(s.success_rate), '', (s) => s.success_rate >= 0.99 ? 'v-ok' : s.success_rate >= 0.95 ? 'v-warn' : 'v-bad', '请求成功率'],
-  ['TTFT P95', (s) => lv(s, s.ttft.p95), 'ms', (s) => lat(s, s.ttft.p95, 800, 2000), 'Time To First Token 首字延迟 P95（与判定同口径）'],
-  ['E2EL P95', (s) => lv(s, s.e2e.p95), 'ms', (s) => lat(s, s.e2e.p95, 800, 2000), 'End-to-End Latency 端到端 P95（与判定同口径）'],
+  ['TTFT P95', (s) => lv(s, s.ttft.p95), 'ms', (s, run) => latSlo(s, s.ttft.p95, runSlo(run).ttft_ms), 'Time To First Token 首字延迟 P95（与判定同口径：合格线见侧栏「合格线 · 延迟」）'],
+  ['E2EL P95', (s) => lv(s, s.e2e.p95), 'ms', (s, run) => latSlo(s, s.e2e.p95, runSlo(run).e2e_ms), 'End-to-End Latency 端到端 P95（与判定同口径：合格线见侧栏「合格线 · 延迟」）'],
 ];
 const METRIC_DEFS = [
   ['RPS', (s) => fmt(s.rps, 2), 'req/s', () => '', '请求速率 = 完成请求数 / 墙钟'],
   ['Output tok/s', (s) => fmt(s.tokens.output_throughput, 1), 'tok/s', () => 'v-info', '总输出 token / 墙钟时长（与 vLLM、SGLang 口径一致）；单请求解码口径见详情'],
   ['Cache hit', (s) => cacheDisplay(s).text, '', (s) => cacheDisplay(s).cls, '缓存命中率 = 命中输入 token / 总输入 token。随机化开启或 prompt 过短时无法测量'],
   ['Goodput', (s) => pct(s.goodput), '', (s) => s.goodput >= 0.9 ? 'v-ok' : 'v-warn', '达标请求占比；vLLM 的 request_goodput 是速率口径（req/s），见详情'],
-  ['TPOT', (s) => (s.measurable && !s.measurable.tpot ? 'n/a' : s.ok ? fmt(s.tpot.mean, 1) : '–'), 'ms', (s) => (s.measurable && !s.measurable.tpot ? '' : lat(s, s.tpot.mean, 40, 100)), 'Time Per Output Token 每 token 时间（非流式不可测）'],
+  ['TPOT', (s) => (s.measurable && !s.measurable.tpot ? 'n/a' : s.ok ? fmt(s.tpot.mean, 1) : '–'), 'ms', (s, run) => (s.measurable && !s.measurable.tpot ? '' : latSlo(s, s.tpot.mean, runSlo(run).tpot_ms)), 'Time Per Output Token 每 token 时间（均值着色用侧栏 tpot 合格线；判定块用 P95）'],
   ['ITL P99', (s) => (s.measurable && !s.measurable.itl ? 'n/a' : fmt(s.itl.p99, 1)), 'ms', () => '', 'Inter-Token Latency 相邻 token 间隔的 P99（非流式不可测）'],
   ['E2EL P50', (s) => lv(s, s.e2e.p50), 'ms', () => '', 'End-to-End Latency 端到端 P50'],
   ['E2EL P99', (s) => lv(s, s.e2e.p99), 'ms', () => '', '端到端长尾；主流压测工具（k6/Locust）都会单列的尾分位'],
@@ -176,29 +180,62 @@ const METRIC_DEFS = [
 
 /* 空态与运行态：都按同一套指标定义渲染，避免列不一致 */
 function summaryEmpty() {
-  $('roPrimary').innerHTML = PRIMARY_DEFS.map(([k, , , , hint]) => `<div class="ro-item"><dt title="${esc(hint || '')}">${k}</dt><dd>–</dd></div>`).join('');
-  $('metrics').innerHTML = METRIC_DEFS.map(([k, , , , hint]) => `<div class="metric"><dt title="${esc(hint || '')}">${k}</dt><dd>–</dd></div>`).join('');
+  $('roPrimary').innerHTML = PRIMARY_DEFS.map(([k, , , , hint]) => `<div class="ro-item is-empty"><dt title="${esc(hint || '')}">${k}</dt><dd>–</dd></div>`).join('');
+  $('metrics').innerHTML = METRIC_DEFS.map(([k, , , , hint]) => `<div class="metric is-empty"><dt title="${esc(hint || '')}">${k}</dt><dd>–</dd></div>`).join('');
   $('verdictBlock').className = 'verdict-block';
   $('vbState').textContent = '待检测';
+  setScore(null);
   $('vbNum').innerHTML = '—<span>ms</span>';
   $('vbSub').textContent = '粘贴渠道配置并开始测试';
   $('vbSlo').innerHTML = '';
   $('vbTicks').innerHTML = ''; $('vbTicksCap').textContent = '最近请求';
 }
 
+/* 健康分 0–100：成功率 40 + 延迟三项各 20（相对合格线 1.0 满分，超线按比例扣） */
+function healthScore(sum, run) {
+  if (!sum || !sum.total) return null;
+  const slo = runSlo(run);
+  const clamp = (x) => Math.max(0, Math.min(1, x));
+  const sr = clamp((sum.success_rate ?? 0) / 1); // 已是 0–1
+  const latPart = (v, limit) => {
+    if (v == null || !limit || !sum.ok) return 0.5; // 无样本中性
+    if (v <= limit) return 1;
+    if (v >= limit * 2) return 0;
+    return clamp(1 - (v - limit) / limit);
+  };
+  const ttft = latPart(sum.ttft && sum.ttft.p95, slo.ttft_ms);
+  const e2e = latPart(sum.e2e && sum.e2e.p95, slo.e2e_ms);
+  const tpot = (sum.measurable && !sum.measurable.tpot) ? 0.5 : latPart(sum.tpot && sum.tpot.p95, slo.tpot_ms);
+  return Math.round(sr * 40 + ttft * 20 + e2e * 20 + tpot * 20);
+}
+
+function setScore(score) {
+  const ring = $('vbRing');
+  const el = $('vbScore');
+  if (!ring || !el) return;
+  if (score == null) { ring.style.setProperty('--score', 0); el.textContent = '–'; return; }
+  ring.style.setProperty('--score', String(score));
+  el.textContent = String(score);
+}
+
 /* 新运行开始：立刻清空上一次的残留（否则看起来像"没反应"） */
 function renderRunning(run) {
   $('verdictBlock').className = 'verdict-block s-run';
   $('vbState').textContent = '运行中';
+  setScore(null);
   $('vbNum').innerHTML = '—<span>ms</span>';
   $('vbSub').innerHTML = run ? `<b>${esc(run.target)}　${esc(run.model)}</b>` : '';
   $('vbSlo').innerHTML = '';
   $('vbTicks').innerHTML = '';
-  $('vbTicksCap').textContent = '预热中…';
-  const dash = (k, hint) => `<div class="metric"><dt title="${esc(hint || '')}">${k}</dt><dd>–</dd></div>`;
-  $('roPrimary').innerHTML = PRIMARY_DEFS.map(([k, , , , hint]) => `<div class="ro-item"><dt title="${esc(hint || '')}">${k}</dt><dd>–</dd></div>`).join('');
+  $('vbTicksCap').textContent = '等待连接…';
+  const dash = (k, hint) => `<div class="metric is-empty"><dt title="${esc(hint || '')}">${k}</dt><dd>–</dd></div>`;
+  $('roPrimary').innerHTML = PRIMARY_DEFS.map(([k, , , , hint]) => `<div class="ro-item is-empty"><dt title="${esc(hint || '')}">${k}</dt><dd>–</dd></div>`).join('');
   $('metrics').innerHTML = METRIC_DEFS.map(([k, , , , hint]) => dash(k, hint)).join('');
   ['e2e', 'ttft', 'tpot', 'tput', 'heat', 'err', 'dist', 'cmp'].forEach((k) => UI.noData($('ch-' + k), 'Waiting for data…'));
+  document.querySelectorAll('#perfDash .panel-grid > .panel').forEach((p) => p.classList.add('is-waiting'));
+}
+function clearWaiting() {
+  document.querySelectorAll('#perfDash .panel-grid > .panel.is-waiting').forEach((p) => p.classList.remove('is-waiting'));
 }
 
 function renderCards(sum) {
@@ -207,21 +244,22 @@ function renderCards(sum) {
   const cell = (k, get, unit, cls, box, hint) => {
     let v = '–';
     try { v = get(sum); } catch { v = '–'; }
-    const showUnit = unit && v !== 'n/a' && v !== '–';
-    return `<div class="${box} ${cls ? cls(sum) : ''}"><dt title="${esc(hint || '')}">${k}</dt><dd>${v}${showUnit ? ` <em>${unit}</em>` : ''}</dd></div>`;
+    const empty = v === '–' || v === 'n/a' || v === '未配置';
+    const showUnit = unit && !empty;
+    const extra = empty ? ' is-empty' : '';
+    return `<div class="${box}${extra} ${cls ? cls(sum, run) : ''}"><dt title="${esc(hint || '')}">${k}</dt><dd>${v}${showUnit ? ` <em>${unit}</em>` : ''}</dd></div>`;
   };
   $('roPrimary').innerHTML = PRIMARY_DEFS.map(([k, get, unit, cls, hint]) => cell(k, get, unit, cls, 'ro-item', hint)).join('');
   $('metrics').innerHTML = METRIC_DEFS.map(([k, get, unit, cls, hint]) => cell(k, get, unit, cls, 'metric', hint)).join('');
 
-  const p95 = sum.e2e ? sum.e2e.p95 : 0;
+  // 无成功样本时延迟无意义：不显示 44px 的「0」（大白 0 会像一块白斑）
+  const p95 = (sum.ok > 0 && sum.e2e && sum.e2e.p95 != null) ? sum.e2e.p95 : null;
   const v = evaluate(sum, run);
-  // 数据状态驱动场景色调：这是"炫酷效果"与"中转测试"的结合点
-  document.body.classList.toggle('mood-warn', v.state === 'warn');
-  document.body.classList.toggle('mood-bad', v.state === 'bad');
   const vb = $('verdictBlock');
-  vb.className = 'verdict-block s-' + v.state;
+  vb.className = 'verdict-block s-' + v.state + (p95 == null ? ' vb-empty' : '');
+  setScore(healthScore(sum, run));
   $('vbState').textContent = v.label;
-  $('vbNum').innerHTML = `${fmt(p95)}<span>ms</span>`;
+  $('vbNum').innerHTML = p95 != null ? `${fmt(p95)}<span>ms</span>` : `—<span>ms</span>`;
   const t = run ? `${run.target}　${run.model}` : '';
   const who = t ? `<b>${esc(t)}</b>` : '粘贴渠道配置并开始测试';
   let cacheLine = '';
@@ -240,9 +278,11 @@ function renderCards(sum) {
       cacheLine += '。注意：输入 token 数偏小（低于常见缓存门槛），建议 ≥1024 再观察命中';
     }
   }
-  $('vbSub').innerHTML = (v.notes.length
-    ? `${who}　<span style="color:var(--bad)">${v.notes.join('；')}</span>`
-    : who) + `<span style="color:var(--faint)">${cacheLine}</span>`;
+  const noteCls = v.state === 'bad' ? 'is-bad' : v.state === 'warn' ? 'is-warn' : '';
+  const noteHtml = v.notes.length
+    ? `<span class="vb-note ${noteCls}">${esc(v.notes.join(' · '))}</span>`
+    : '';
+  $('vbSub').innerHTML = `${who}${noteHtml}<span class="vb-cache">${esc(cacheLine)}</span>`;
   const shortK = { 'Success rate': '成功率', 'E2EL P95': 'E2EL', 'TTFT P95': 'TTFT', 'TPOT P95': 'TPOT' };
   $('vbSlo').innerHTML = (v.chips || []).map((ch) =>
     `<span class="slo-chip ${ch.cls}" title="${esc(ch.tip || '')}">${esc(shortK[ch.k] || ch.k)} <b>${esc(ch.v)}</b></span>`).join('');
@@ -251,7 +291,7 @@ function renderCards(sum) {
 
 /* 判定完全由"用户设的合格线"驱动，并在界面上写明是哪一条没过 —— 不再是魔法数字 */
 function evaluate(sum, run) {
-  const slo = Object.assign({ ttft_ms: 1500, tpot_ms: 50, e2e_ms: 5000 }, (run && run.slo) || {});
+  const slo = runSlo(run);
   const rows = [
     { k: 'Success rate', v: sum.success_rate, limit: slo_rate(slo), cmp: '>=', bad: 0.95, show: pct },
     { k: 'E2EL P95', v: sum.e2e ? sum.e2e.p95 : null, limit: slo.e2e_ms, cmp: '<=', show: (x) => fmt(x) + ' ms' },
@@ -297,12 +337,13 @@ function renderTicks(run) {
     return `<i class="${s.ok ? '' : 'f'}" style="height:${h}%" title="#${s.seq} ${s.ok ? fmt(s.e2e_ms) + ' ms' : (s.error_class || '失败')}"></i>`;
   }).join('');
   const fails = S.filter((s) => !s.ok).length;
-  $('vbTicksCap').textContent = `最近 ${S.length} 次请求${fails ? `，失败 ${fails}` : ''}`;
+  const prog = run.requestCount ? ` · ${run.samples.length}/${run.requestCount}` : (run.samples.length ? ` · ${run.samples.length} 条` : '');
+  $('vbTicksCap').textContent = `最近 ${S.length} 次请求${prog}${fails ? `，失败 ${fails}` : ''}`;
 }
 
 /* ---------- 单 run 图表 ---------- */
 // 少于这么多条样本时，波形图只会画出误导性的直线/三角形，不如明说
-const MIN_WAVE = 5;
+const MIN_WAVE = 2;
 const MIN_BAND = 20;
 const MIN_HIST = 10;
 
@@ -316,11 +357,16 @@ function renderSingle(run) {
   if (raw.length < MIN_WAVE) {
     ['e2e', 'ttft', 'tpot', 'tput', 'heat', 'err', 'dist'].forEach((k) =>
       UI.noData($('ch-' + k), `样本不足（${raw.length} 条，至少需 ${MIN_WAVE} 条）`));
+    renderErrors(raw);
     return;
   }
-  const S = raw;
+  // 延迟三图只画成功样本：失败请求的 e2e（超时/错误耗时）会把 Y 轴和分位带全部带偏
+  const S = raw.filter((s) => s.ok);
   const idx = S.map((_, i) => i);
   const e2e = S.map((s) => s.e2e_ms), ttft = S.map((s) => s.ttft_ms), tpot = S.map((s) => s.tpot_ms);
+  const hasTTFT = ttft.some((v) => v != null && isFinite(v) && v > 0);
+  const hasTPOT = tpot.some((v) => v != null && isFinite(v) && v > 0);
+  const hasE2E = e2e.some((v) => v != null && isFinite(v) && v > 0);
   const slo = Object.assign({ ttft_ms: 1500, tpot_ms: 50, e2e_ms: 5000 }, run.slo || {});
   const ln = (name, data, color, w = 1.5, extra = {}) => ({ name, type: 'line', showSymbol: false, smooth: 0.25, data, lineStyle: { color, width: w, cap: 'round', join: 'round' }, itemStyle: { color }, ...extra });
 
@@ -331,75 +377,104 @@ function renderSingle(run) {
   const band = P95.map((v, i) => (v != null && P50[i] != null ? +(v - P50[i]).toFixed(1) : 0));
   const seqCat = S.map((s) => String(s.seq));
   const dense = S.length > 120;   // 样本多时原始点变噪声，自动退到图例里
+  if (!hasE2E) {
+    UI.noData($('ch-e2e'), '无成功样本 · 延迟不可测');
+  } else {
   charts.e2e.setOption(UI.base({
     tooltip: UI.tooltip('ms'),
     legend: { right: 8, top: 0, itemWidth: 14, itemHeight: 3, textStyle: { color: C.tx2, fontSize: 10 }, selected: dense ? { raw: false } : {}, data: run.mode === 'open' ? ['raw', 'P50', 'P95', 'corrected'] : ['raw', 'P50', 'P95'] },
     xAxis: { type: 'category', boundaryGap: false, data: seqCat, name: 'seq', nameTextStyle: { color: C.tx3, fontSize: 10 }, axisLabel: { ...AXIS, interval: 'auto', hideOverlap: true }, axisLine: { lineStyle: { color: C.line2 } }, splitLine: { show: false } },
     yAxis: { type: 'value', scale: true, splitNumber: 4, name: 'ms', nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: UI.axisLabelFor(e2e), ...robustRange(e2e), axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
     series: [
-      // 分位带用 custom 矩形逐点绘制：stack 遇到 null 会被当成 0，把 Y 轴拉到 0，整条带从底填起
+      // 分位带：整段 polygon（P95 上沿 + P50 下沿），避免逐点半透明矩形叠出栅栏条纹
       ...(S.length >= MIN_BAND ? [{
         name: '_band', type: 'custom', silent: true, z: 1,
         data: P50.map((v, i) => [i, v, P95[i]]),
         renderItem: (params, api) => {
-          const lo = api.value(1), hi = api.value(2);
-          if (lo == null || hi == null) return;
-          const a = api.coord([api.value(0), lo]);
-          const b = api.coord([api.value(0), hi]);
-          const top = Math.min(a[1], b[1]);
-          const h = Math.max(1, Math.abs(a[1] - b[1]));
-          // 分类轴上 api.size([1,0]) 恒为 0，必须用相邻 category 的像素差求真实宽度，
-          // 否则每个矩形退化成细条，整条带看起来像"栅栏"。
-          const x0 = api.coord([api.value(0), 0])[0];
-          const x1 = api.coord([api.value(0) + 1, 0])[0];
-          const w = Math.max(2, Math.abs(x1 - x0) + 1);
-          return { type: 'rect', shape: { x: a[0] - w / 2, y: top, width: w, height: h }, style: { fill: 'rgba(242,204,12,.16)' } };
+          const kids = [];
+          let top = [], bot = [];
+          const flush = () => {
+            if (top.length >= 2) {
+              kids.push({
+                type: 'polygon',
+                shape: { points: top.concat(bot.slice().reverse()) },
+                style: { fill: UI.hexA(C.tr3, .11), stroke: 'none' },
+              });
+            }
+            top = []; bot = [];
+          };
+          for (let i = 0; i < P50.length; i++) {
+            const lo = P50[i], hi = P95[i];
+            if (lo == null || hi == null || !isFinite(lo) || !isFinite(hi)) { flush(); continue; }
+            top.push(api.coord([i, hi]));
+            bot.push(api.coord([i, lo]));
+          }
+          flush();
+          if (!kids.length) return;
+          return { type: 'group', children: kids };
         },
       }] : []),
-      { name: 'raw', type: 'scatter', symbolSize: dense ? 2 : 4, data: e2e, itemStyle: { color: C.tr4, opacity: dense ? .22 : .5 }, z: 3},
-      ln('P50', P50, C.tr1, 1.8, { z: 4 }),
-      ln('P95', P95, C.tr3, 1.8, { z: 4 }),
+      { name: 'raw', type: 'scatter', symbolSize: dense ? 2 : 4, data: e2e, itemStyle: { color: '#8a8a8a', opacity: dense ? .18 : .35 }, z: 3},
+      ln('P50', P50, C.tr1, 1.6, { z: 4 }),
+      ln('P95', P95, C.tr3, 1.4, { lineStyle: { color: C.tr3, width: 1.4, type: 'dashed' }, z: 4 }),
       ...(run.mode === 'open'
         ? [ln('corrected', S.map((s) => s.corrected_e2e_ms), C.tr2, 1.2, { lineStyle: { color: C.tr2, width: 1.2, type: 'dashed' }, z: 2 })]
         : []),
     ],
   }), true);
+  }
 
   const sloLine = (v, color) => ({ silent: true, symbol: 'none', lineStyle: { color, type: 'dashed', width: 1 }, label: { formatter: 'SLO', color, fontSize: 9 }, data: [{ yAxis: v }] });
+  if (!hasTTFT) {
+    UI.noData($('ch-ttft'), '无 TTFT 样本 · 全部失败或非流式');
+  } else {
   charts.ttft.setOption(UI.base({
     tooltip: UI.tooltip('ms'),
     xAxis: { type: 'category', boundaryGap: false, data: seqCat, axisLabel: { ...AXIS, hideOverlap: true, interval: Math.max(0, Math.ceil(S.length / 6) - 1) }, axisLine: { lineStyle: { color: C.line2 } }, splitLine: { show: false }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
     yAxis: { type: 'value', scale: true, splitNumber: 4, name: 'ms', nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: UI.axisLabelFor(ttft), ...robustRange(ttft), axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
-    series: [ln('TTFT', ttft, C.tr3, 1.5, { areaStyle: { color: UI.grad(C.tr3, .2, 0) }, markLine: sloLine(slo.ttft_ms, C.yellow) })],
+    series: [ln('TTFT', ttft, C.tr3, 1.4, { areaStyle: { color: UI.grad(C.tr3, .1, 0) }, markLine: sloLine(slo.ttft_ms, C.yellow) })],
   }), true);
+  }
 
+  if (!hasTPOT) {
+    UI.noData($('ch-tpot'), '无 TPOT 样本 · 全部失败或非流式');
+  } else {
   charts.tpot.setOption(UI.base({
     tooltip: UI.tooltip('ms'),
     xAxis: { type: 'category', boundaryGap: false, data: seqCat, axisLabel: { ...AXIS, hideOverlap: true, interval: Math.max(0, Math.ceil(S.length / 6) - 1) }, axisLine: { lineStyle: { color: C.line2 } }, splitLine: { show: false }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
     yAxis: { type: 'value', scale: true, splitNumber: 4, name: 'ms', nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: UI.axisLabelFor(tpot), ...robustRange(tpot), axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
-    series: [ln('TPOT', tpot, C.tr4, 1.5, { areaStyle: { color: UI.grad(C.tr4, .2, 0) }, markLine: sloLine(slo.tpot_ms, C.yellow) })],
+    series: [ln('TPOT', tpot, C.tr4, 1.4, { areaStyle: { color: UI.grad(C.tr4, .1, 0) }, markLine: sloLine(slo.tpot_ms, C.yellow) })],
   }), true);
+  }
 
-  const winMs = Math.max(1000, pickBucketMs(S));
-  const [rpsArr, tokArr] = windowedRate(S, winMs);
-  charts.tput.setOption(UI.base({
-    tooltip: UI.tooltip(),
-    grid: { left: 54, right: 52, top: 26, bottom: 30 },
-    legend: { right: 8, top: 0, itemWidth: 14, itemHeight: 3, textStyle: { color: C.tx2, fontSize: 10 } },
-    xAxis: { type: 'category', boundaryGap: false, data: seqCat, axisLabel: { ...AXIS, hideOverlap: true, interval: Math.max(0, Math.ceil(S.length / 6) - 1) }, axisLine: { lineStyle: { color: C.line2 } }, splitLine: { show: false }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
-    yAxis: [
-      { type: 'value', scale: true, splitNumber: 4, name: 'req/s', nameLocation: 'middle', nameRotate: 90, nameGap: 36, nameTextStyle: { color: C.tr1, fontSize: 11 }, axisLabel: { ...UI.axisLabelFor(rpsArr), color: C.tr1, margin: 6 }, axisLine: { show: true, lineStyle: { color: C.tr1, opacity: .35 } }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 } },
-      { type: 'value', scale: true, splitNumber: 4, name: 'tok/s', nameLocation: 'middle', nameRotate: 90, nameGap: 40, nameTextStyle: { color: C.tr2, fontSize: 11 }, axisLabel: { ...UI.axisLabelFor(tokArr), color: C.tr2, margin: 6 }, axisLine: { show: true, lineStyle: { color: C.tr2, opacity: .35 } }, splitLine: { show: false } },
-    ],
-    series: [
-      ln('req/s', rpsArr, C.tr1, 1.6, { areaStyle: { color: UI.grad(C.tr1, .18, 0) } }),
-      ln('tok/s', tokArr, C.tr2, 1.6, { yAxisIndex: 1 }),
-    ],
-  }), true);
-  const tn = $('tputNote');
-  if (tn) tn.textContent = `按 ${winMs >= 60000 ? (winMs / 60000) + ' 分钟' : (winMs / 1000) + ' 秒'}滑动窗口计算`;
-
-  renderHeat(S); renderErrors(S); renderDist(S);
+  // 窗口下限 5s：短窗 + seq 等距 x 会把完成时刻抖动画成梳齿
+  if (!S.length) {
+    UI.noData($('ch-tput'), '无成功样本 · 吞吐不可测');
+    UI.noData($('ch-heat'), '无成功样本 · 延迟不可测');
+    UI.noData($('ch-dist'), '无成功样本 · 分布不可测');
+  } else {
+    const winMs = Math.max(5000, pickBucketMs(S));
+    const [rpsArr, tokArr] = windowedRate(S, winMs);
+    charts.tput.setOption(UI.base({
+      tooltip: UI.tooltip(),
+      grid: { left: 54, right: 52, top: 26, bottom: 30 },
+      legend: { right: 8, top: 0, itemWidth: 14, itemHeight: 3, textStyle: { color: C.tx2, fontSize: 10 } },
+      xAxis: { type: 'category', boundaryGap: false, data: seqCat, axisLabel: { ...AXIS, hideOverlap: true, interval: Math.max(0, Math.ceil(S.length / 6) - 1) }, axisLine: { lineStyle: { color: C.line2 } }, splitLine: { show: false }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
+      yAxis: [
+        { type: 'value', scale: true, splitNumber: 4, name: 'req/s', nameLocation: 'middle', nameRotate: 90, nameGap: 36, nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: { ...UI.axisLabelFor(rpsArr), color: C.tx3, margin: 6 }, axisLine: { show: true, lineStyle: { color: C.line2 } }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 } },
+        { type: 'value', scale: true, splitNumber: 4, name: 'tok/s', nameLocation: 'middle', nameRotate: 90, nameGap: 40, nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: { ...UI.axisLabelFor(tokArr), color: C.tx3, margin: 6 }, axisLine: { show: false }, splitLine: { show: false } },
+      ],
+      series: [
+        ln('req/s', rpsArr, C.tr1, 1.4, { smooth: 0.4, areaStyle: { color: UI.grad(C.tr1, .08, 0) } }),
+        ln('tok/s', tokArr, C.tr3, 1.4, { smooth: 0.4, yAxisIndex: 1 }),
+      ],
+    }), true);
+    const tn = $('tputNote');
+    if (tn) tn.textContent = `按 ${winMs >= 60000 ? (winMs / 60000) + ' 分钟' : (winMs / 1000) + ' 秒'}滑动窗口计算`;
+    renderHeat(S); renderDist(S);
+  }
+  // 错误图必须吃全量样本（含失败），否则全失败时会显示 No errors
+  renderErrors(raw);
 }
 
 function latBucket(v) { const b = [50, 100, 200, 400, 800, 1600, 3200, 6400, 12800]; for (let i = 0; i < b.length; i++) if (v < b[i]) return i; return b.length; }
@@ -415,7 +490,7 @@ function renderErrors(S) {
     legend: { right: 8, top: 0, itemWidth: 14, itemHeight: 3, textStyle: { color: C.tx2, fontSize: 10 } },
     xAxis: { type: 'category', boundaryGap: false, data: buckets.map(([b]) => fmtB(b / 1000)), axisLabel: { ...AXIS, hideOverlap: true, interval: Math.max(0, Math.ceil(buckets.length / 6) - 1) }, axisLine: { lineStyle: { color: C.line2 } }, splitLine: { show: false } },
     yAxis: { type: 'value', name: '错误数', nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: AXIS, axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
-    series: classes.map((cls, i) => ({ name: cls, type: 'bar', stack: 'e', barMaxWidth: 18, data: buckets.map(([, a]) => a.filter((s) => !s.ok && (s.error_class || 'unknown') === cls).length), itemStyle: { color: C.series[(i + 5) % C.series.length], borderRadius: [4, 4, 0, 0] } })),
+    series: classes.map((cls, i) => ({ name: cls, type: 'bar', stack: 'e', barMaxWidth: 18, data: buckets.map(([, a]) => a.filter((s) => !s.ok && (s.error_class || 'unknown') === cls).length), itemStyle: { color: UI.hexA(C.bad, .55), borderRadius: [3, 3, 0, 0] }, emphasis: { itemStyle: { color: UI.hexA(C.bad, .85) } } })),
   }), true);
 }
 
@@ -444,7 +519,10 @@ function renderHeat(S) {
     tooltip: { ...UI.tooltip(), trigger: 'item', position: 'top' }, grid: { left: 66, right: 14, top: 8, bottom: 26 },
     xAxis: { type: 'category', data: buckets.map(([b]) => f(b / 1000)), axisLabel: { ...AXIS, hideOverlap: true, interval: Math.max(0, Math.ceil(buckets.length / 8) - 1) }, axisLine: { lineStyle: { color: C.line2 } }, splitLine: { show: false } },
     yAxis: { type: 'category', name: '延迟', nameTextStyle: { color: C.tx3, fontSize: 11 }, data: ys.map((y) => yLabels[y]), axisLabel: AXIS, axisLine: { show: false }, splitLine: { show: false } },
-    visualMap: { show: false, min: 0, max },
+    visualMap: {
+      show: false, min: 0, max,
+      inRange: { color: ['rgba(30,30,30,.5)', 'rgba(50,80,0,.65)', 'rgba(76,138,0,.85)', '#76b900'] },
+    },
     series: [{ type: 'heatmap', data, itemStyle: { borderRadius: 4, borderColor: 'rgba(0,0,0,.25)', borderWidth: 1 }, emphasis: { itemStyle: { borderColor: C.tx1, borderWidth: 1 } } }],
   }), true);
 }
@@ -502,28 +580,31 @@ function renderDist(S) {
 
 function renderCompareChart() {
   // 只对比最近 5 条：线上轨迹太多会糊成一片，图例也放不下
-  const all = [...state.runs.values()].filter((r) => visSamples(r).length)
+  // 只画成功样本：失败请求的超时耗时会把 Y 轴拉到几十秒，轨迹变成一条假高位线
+  const all = [...state.runs.values()].filter((r) => visSamples(r).some((s) => s.ok))
     .sort((a, b) => (a.samples[0]?.ts || 0) - (b.samples[0]?.ts || 0));
   const runs = all.slice(-5);
   $('cmpLegend').textContent = runs.length ? `最近 ${runs.length} 条${all.length > runs.length ? ` / 共 ${all.length}` : ''}` : '';
-  if (!runs.length) { UI.noData($('ch-cmp')); return; }
+  if (!runs.length) { UI.noData($('ch-cmp'), '无成功样本 · 暂无可对比轨迹'); return; }
   const series = runs.map((r) => {
-    const S = visSamples(r);
+    const S = visSamples(r).filter((s) => s.ok);
+    if (!S.length) return null;
     const t0 = S[0].ts, step = Math.max(1, Math.floor(S.length / 800)), pts = [];
     for (let i = 0; i < S.length; i += step) { if (S[i].e2e_ms != null) pts.push([+(S[i].ts - t0).toFixed(1), S[i].e2e_ms]); }
     // 名字必须唯一：多条同名 run 会被 ECharts 图例合并，看起来像是丢数据
     const stamp = new Date((r.samples[0].ts || 0) * 1000).toTimeString().slice(0, 5);
     return { name: `${r.target} (${r.model}) ${stamp}`, type: 'line', showSymbol: false,
              data: pts, lineStyle: { color: r.color, width: 1.4 } };
-  });
+  }).filter(Boolean);
+  if (!series.length) { UI.noData($('ch-cmp'), '无成功样本 · 暂无可对比轨迹'); return; }
   charts.cmp.setOption(UI.base({
-    tooltip: { ...UI.tooltip(), trigger: 'item' },
+    tooltip: UI.tooltip('ms'),
     // 图例放底部：多条轨迹时顶部会盖住波形
     legend: { bottom: 0, left: 'center', itemWidth: 14, itemHeight: 3,
               textStyle: { color: C.tx2, fontSize: 10 }, data: series.map((x) => x.name) },
     grid: { left: 60, right: 20, top: 22, bottom: 46 },
     xAxis: { type: 'value', name: '相对时间(s)', nameTextStyle: { color: C.tx3, fontSize: 10 }, axisLabel: AXIS, axisLine: { lineStyle: { color: C.line2 } }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
-    yAxis: { type: 'value', scale: true, splitNumber: 4, name: 'E2E ms', nameLocation: 'middle', nameRotate: 90, nameGap: 44, nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: UI.axisLabelFor(runs.flatMap((r) => visSamples(r).map((x) => x.e2e_ms))), axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
+    yAxis: { type: 'value', scale: true, splitNumber: 4, name: 'E2E ms', nameLocation: 'middle', nameRotate: 90, nameGap: 44, nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: UI.axisLabelFor(series.flatMap((s) => s.data.map((p) => p[1]))), axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
     series,
   }), true);
 }
@@ -562,7 +643,7 @@ function renderRuns() {
       <td>${esc(r.model)}</td>
       <td>${statusBadge(r.status)}</td>
       <td class="num">${s.total ?? r.samples.length}</td>
-      <td class="num">${s.ok != null ? s.ok : '–'}${s.success_rate != null ? ` <span class="mono" style="color:var(--faint)">${pct(s.success_rate)}</span>` : ''}</td>
+      <td class="num">${s.ok != null ? s.ok : '–'}${s.success_rate != null ? ` <span class="mono" style="color:var(--tx-3)">${pct(s.success_rate)}</span>` : ''}</td>
       <td class="num">${s.e2e ? fmt(s.e2e.p95) + ' ms' : '–'}</td>
       <td class="num">${s.ttft ? fmt(s.ttft.mean) + ' ms' : '–'}</td>
       <td class="num">${s.tpot ? fmt(s.tpot.mean, 1) + ' ms' : '–'}</td>
@@ -570,7 +651,7 @@ function renderRuns() {
       <td class="act"><button class="mini" data-act="sel" data-id="${r.id}">主视图</button>
         <button class="mini ghost" data-act="detail" data-id="${r.id}">详情</button></td>
     </tr>`;
-  }).join('') || '<tr><td colspan="10" class="hint">暂无运行记录</td></tr>';
+  }).join('') || '<tr><td colspan="10" class="hint">暂无记录</td></tr>';
   /* 运行时间线（status-page 惯例）：每格一条运行，颜色=成功率档位，点击切主视图 */
   const tl = $('runsTimeline');
   if (tl) {
@@ -603,7 +684,7 @@ function renderCompareTable() {
     ['Errors', (r) => r.summary.failed, 'low', (v) => v],
   ];
   const head = $('cmpTable').querySelector('thead'), body = $('cmpTable').querySelector('tbody');
-  if (!runs.length) { head.innerHTML = ''; body.innerHTML = '<tr><td class="hint">暂无数据</td></tr>'; return; }
+  if (!runs.length) { head.innerHTML = ''; body.innerHTML = '<tr><td class="hint">暂无记录</td></tr>'; return; }
   head.innerHTML = '<tr>' + cols.map(([h, , dir]) => `<th class="${dir ? 'num' : ''}">${h}</th>`).join('') + '</tr>';
   const bounds = cols.map(([, get, dir]) => {
     if (!dir) return null;
@@ -622,7 +703,7 @@ function refreshTopbar() {
   const runs = [...state.runs.values()];
   $('runCount').textContent = runs.length;
   $('reqCount').textContent = runs.reduce((a, r) => a + (r.summary?.total ?? r.samples.length), 0);
-  $('errCount').textContent = runs.reduce((a, r) => a + (r.summary?.failed ?? 0), 0);
+  $('errCount').textContent = runs.reduce((a, r) => a + (r.summary?.failed ?? r.samples.filter((s) => !s.ok).length), 0);
   $('rec').hidden = !runs.some((r) => r.status === 'running');
   // 有数据 → 显示仪表盘，隐藏空态
   const has = runs.length > 0;
@@ -631,25 +712,6 @@ function refreshTopbar() {
   document.body.classList.toggle('has-data', has);
 }
 
-/* ---------- Logo 三球玻璃场景 ----------
-   三个动态白色玻璃球限制在 logo 周围（76px 区域），screen 混合让黑底隐形、只留球体。
-   不传文字：球体靠边缘菲涅尔 + 高光成像，正好是"白色玻璃球"。
-   色调仍跟随渠道健康状态：正常银白 / 偏慢偏黄 / 不合格偏红。 */
-let _hero = null;
-function mountHero() {
-  if (_hero || !window.GlassHero) return;
-  const cv = $('logoScene');
-  if (!cv) return;
-  _hero = GlassHero.mount(cv, {
-    lines: [],                       // 不要文字层
-    bright: true,                    // 明亮底 → 球体像实心白色玻璃
-    spheres: [                       // 三球聚在 logo 外圈，避开中心的 logo 方块
-      { r: 0.150, hx: 0.24, hy: 0.30, follow: 0.09, drift: 3.0, ox: 0, oy: 0 },
-      { r: 0.110, hx: 0.78, hy: 0.34, follow: 0.07, drift: 2.4, ox: 0, oy: 0 },
-      { r: 0.086, hx: 0.52, hy: 0.84, follow: 0.11, drift: 2.0, ox: 0, oy: 0 },
-    ],
-  });
-}
 window.addEventListener('viewchange', () => Object.values(charts).forEach((c) => c && c.resize()));
 
 /* ---------- 配置侧栏折叠 ---------- */
@@ -686,7 +748,7 @@ function renderRequests() {
   const rows = filteredRequests();
   const all = state.reqSamples;
   const fails = all.filter((r) => !r.ok).length;
-  $('reqCount').textContent = all.length
+  $('reqHint').textContent = all.length
     ? `共 ${all.length} 条，失败 ${fails} 条${rows.length !== all.length ? `，当前筛选 ${rows.length} 条` : ''}`
     : '（该运行暂无样本，点上方运行行切换）';
   // 错误类下拉
@@ -699,7 +761,7 @@ function renderRequests() {
 
   const body = $('reqBody');
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="9" class="hint">${all.length ? '没有符合条件的请求' : '暂无数据'}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="9" class="hint">${all.length ? '没有符合条件的请求' : '暂无记录'}</td></tr>`;
     return;
   }
   const style = (r) => (r.ok ? '' : 'style="color:var(--bad)"');
@@ -758,33 +820,51 @@ async function openRunDetail(id) {
 function connectSSE(run) {
   const es = new EventSource(`/api/runs/${run.id}/stream`);
   run.sse = es;
+  es.onopen = () => {
+    run.sseOpen = true;
+    if (state.primary === run.id && run.status === 'running') {
+      $('vbTicksCap').textContent = run.samples.length ? `最近 ${run.samples.length} 次请求` : '流已连接 · 等待样本…';
+    }
+  };
   es.onmessage = (ev) => {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.type === 'sample') {
       run.samples.push(msg.data);
       if (run.samples.length > 4000) run.samples.shift();
       if (!msg.data.ok) log('warn', `[${run.target}] #${msg.data.seq} 失败 ${msg.data.error_class || ''} ${msg.data.status_code || ''}`);
+      clearWaiting();
+      if (state.primary === run.id) renderTicks(run);
+      refreshTopbar();
     } else if (msg.type === 'summary') {
       run.summary = msg.data;
       if (state.primary === run.id) renderCards(run.summary);
-      renderRuns(); renderCompareTable();
+      refreshTopbar();
+      if (!msg.live) { renderRuns(); renderCompareTable(); }
     } else if (msg.type === 'phase') {
       if (msg.phase === 'warmup') {
         $('vbTicksCap').textContent = `预热中 ${msg.done}/${msg.total}（预热不计入统计）`;
       } else if (msg.phase === 'steady' && state.primary === run.id) {
-        $('vbTicksCap').textContent = '最近请求';
+        $('vbTicksCap').textContent = run.samples.length ? `最近 ${run.samples.length} 次请求` : '预热完成 · 等待样本…';
       }
     } else if (msg.type === 'status') {
       run.status = msg.status; renderRuns();
       if (msg.status === 'done' || msg.status === 'error') {
+        clearWaiting();
         log(msg.status === 'done' ? 'ok' : 'err', `[${run.target}] 运行结束：${msg.status}`);
         UI.toast(`${run.target} 运行${msg.status === 'done' ? '完成' : '出错'}`, msg.status === 'done' ? 'ok' : 'err');
         es.close();
         fetchJSON(`/api/runs/${run.id}`).then((d) => { run.summary = d.summary; if (state.primary === run.id) renderCards(d.summary); renderRuns(); renderCompareTable(); renderSingle(run); notify(run); });
       }
+    } else if (msg.type === 'error') {
+      UI.toast(`运行出错：${msg.message || '未知错误'}`, 'err');
+      if (state.primary === run.id) $('vbTicksCap').textContent = '连接异常';
     }
   };
-  es.onerror = () => { if (run.status === 'done' || run.status === 'error') es.close(); };
+  es.onerror = () => {
+    if (run.status === 'done' || run.status === 'error') { es.close(); return; }
+    run.sseOpen = false;
+    if (state.primary === run.id) $('vbTicksCap').textContent = '连接中断，重连中…';
+  };
 }
 
 /* ---------- 渲染循环 ---------- */
@@ -818,15 +898,32 @@ function renderTargets() {
         <span class="badge">${esc(t.provider)}</span>
         <button class="chan-x" data-rm="${i}" title="移除">×</button>
       </span>
-      ${t.base_url ? `<span class="chan-url">${esc(t.base_url.replace(/^https?:\/\//, ''))}</span>`
-                   : '<span class="chan-warn">待填地址</span>'}
+      ${t.base_url ? `<span class="chan-url" title="${esc(t.base_url)}">${esc(t.base_url.replace(/^https?:\/\//, ''))}</span>`
+                   : `<button type="button" class="chan-warn" data-fillurl="${i}" title="点击补填 base_url">待填地址</button>`}
       ${t.api_key ? `<span class="chan-key">${esc(maskKey(t.api_key))}</span>`
                   : '<span class="chan-warn">缺少密钥</span>'}
     </div>`).join('') || '<div class="hint">还没识别到渠道。把供应商给的内容贴进上面的框，点「识别配置」。</div>';
 }
+// 渠道卡缺地址：就地补填，不必整段重贴
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-fillurl]');
+  if (!b) return;
+  const i = Number(b.dataset.fillurl);
+  const cur = state.targets[i];
+  if (!cur) return;
+  const url = prompt('补填 base_url（完整接口地址，如 https://api.example.com/v1）', cur.base_url || 'https://');
+  if (url == null) return;
+  const u = url.trim();
+  if (!u) return;
+  state.targets[i] = { ...cur, base_url: u };
+  renderTargets();
+  UI.toast('已更新 base_url', 'ok');
+});
 async function doParse() {
   const text = $('paste').value.trim();
-  if (!text) return;
+  if (!text) { UI.toast('先粘贴供应商配置（地址 / 密钥 / 模型）', 'warn'); $('paste').focus(); return; }
+  const btn = $('btnParse');
+  UI.setBusy(btn, true, '识别中…');
   try {
     const d = await fetchJSON('/api/parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
     state.targets = d.targets;
@@ -838,6 +935,7 @@ async function doParse() {
     log(d.targets.length ? 'ok' : 'warn', `识别到 ${d.targets.length} 个渠道${warn.length ? '（' + warn.join('，') + '）' : ''}`);
     UI.toast(d.targets.length ? `识别到 ${d.targets.length} 个渠道${warn.length ? '，' + warn.join('，') : ''}` : '没识别出渠道，检查一下粘贴内容', d.targets.length ? (warn.length ? 'warn' : 'ok') : 'warn');
   } catch (e) { log('err', '识别失败: ' + e.message); UI.toast('识别失败: ' + e.message, 'err'); }
+  finally { UI.setBusy(btn, false); }
 }
 async function doStart() {
   if (!state.targets.length) { await doParse(); if (!state.targets.length) { UI.toast('请先粘贴配置并点「识别配置」', 'warn'); return; } }
@@ -845,7 +943,8 @@ async function doStart() {
   if (!ready.length) { UI.toast('还没有可用地址，请补上 base_url 后再测', 'warn'); setSidebar(true); return; }
   const missing = state.targets.length - ready.length;
   if (missing) UI.toast(`${missing} 个渠道缺地址，本次跳过`, 'warn');
-  $('btnStart').disabled = true;
+  const btn = $('btnStart');
+  UI.setBusy(btn, true, '启动中…');
   try {
     const cfg = buildConfig();
     const d = await fetchJSON('/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) });
@@ -853,19 +952,27 @@ async function doStart() {
     UI.toast(`已启动 ${d.count} 个运行`, 'ok');
     d.run_ids.forEach((rid, i) => {
       const t = state.targets[i];
-      const run = { id: rid, target: t.name, model: t.model, provider: t.provider, status: 'running', samples: [], summary: null, slo: cfg.slo, mode: cfg.mode, randomize: cfg.randomize, promptMode: cfg.traffic && cfg.traffic.prompt_mode, color: C.series[state.colorIdx++ % C.series.length], sse: null };
+      const run = { id: rid, target: t.name, model: t.model, provider: t.provider, status: 'running', samples: [], summary: null, slo: cfg.slo, mode: cfg.mode, requestCount: cfg.mode === 'open' ? null : cfg.request_count, randomize: cfg.randomize, promptMode: cfg.traffic && cfg.traffic.prompt_mode, color: C.series[state.colorIdx++ % C.series.length], sse: null, sseOpen: false };
       state.runs.set(rid, run); state.primary = rid; connectSSE(run);
     });
-    renderRuns(); renderCompareTable();
+    renderRuns(); renderCompareTable(); refreshTopbar();
     const first = state.runs.get(state.primary);
     if (first) renderRunning(first);
-    setSidebar(false); // 开测后收起配置面板，让图表占满
+    // 收起前先把焦点挪出侧栏，再提示 ⌘B——否则键盘用户焦点跌回 body
+    const wasOpen = !document.getElementById('app').classList.contains('side-collapsed');
+    setSidebar(false);
+    $('btnSidebar').focus({ preventScroll: true });
+    if (wasOpen) UI.toast('已收起配置面板 · ⌘B 展开', 'info', 2500);
   } catch (e) { log('err', '启动失败: ' + e.message); UI.toast('启动失败: ' + e.message, 'err'); }
-  finally { $('btnStart').disabled = false; }
+  finally { UI.setBusy(btn, false); }
 }
 async function control(act) {
   if (!state.primary) { UI.toast('请先选择一个运行', 'warn'); return; }
-  try { await fetchJSON(`/api/runs/${state.primary}/${act}`, { method: 'POST' }); log('info', `已发送 ${act}`); } catch (e) { log('err', e.message); }
+  try {
+    await fetchJSON(`/api/runs/${state.primary}/${act}`, { method: 'POST' });
+    log('info', `已发送 ${act}`);
+    UI.toast(act === 'stop' ? '已发送停止' : act === 'pause' ? '已发送暂停' : '已发送继续', 'info', 2000);
+  } catch (e) { log('err', e.message); UI.toast('操作失败: ' + e.message, 'err'); }
 }
 function buildConfig() {
   const n = (id) => Number($(id).value);
@@ -918,8 +1025,8 @@ async function doModels() {
     try {
       const d = await fetchJSON('/api/targets/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targets: [t] }) });
       const models = (d.models && d.models[t.name]) || [];
-      out.push(`<h4 style="color:var(--ink);font-size:12px;font-weight:600;margin:10px 0 4px">${esc(t.name)} · ${models.length} 个模型</h4>
-        <div class="mono" style="font-size:11px;color:var(--muted);max-height:220px;overflow:auto;border:1px solid var(--rule);border-radius:8px;padding:8px">${models.map(esc).join('<br>') || '<span class="hint">无（可能不支持 /v1/models）</span>'}</div>`);
+      out.push(`<h4 style="color:var(--tx-1);font-size:12px;font-weight:600;margin:10px 0 4px">${esc(t.name)} · ${models.length} 个模型</h4>
+        <div class="mono" style="font-size:11px;color:var(--tx-2);max-height:220px;overflow:auto;border:1px solid var(--line-2);border-radius:8px;padding:8px">${models.map(esc).join('<br>') || '<span class="hint">无（可能不支持 /v1/models）</span>'}</div>`);
     } catch (e) { out.push(`<div class="hint">${esc(t.name)}: ${esc(e.message)}</div>`); }
   }
   UI.openModal('模型列表', out.join(''));
@@ -940,7 +1047,7 @@ function cacheResultHtml(r) {
   const s = r.summary || {};
   const delta = (r.baseline && s.speedup != null && r.baseline.speedup)
     ? s.speedup - r.baseline.speedup : null;
-  const deltaTxt = delta == null ? '' : `<span style="color:${delta >= 0 ? 'var(--ok)' : '#ff6961'}">${delta >= 0 ? '+' : ''}${delta.toFixed(2)}×</span>`;
+  const deltaTxt = delta == null ? '' : `<span style="color:${delta >= 0 ? 'var(--ok)' : 'var(--bad)'}">${delta >= 0 ? '+' : ''}${delta.toFixed(2)}×</span>`;
   const kv = `<div class="kv">
     ${r.baseline ? `<div class="k">基线加速比</div><div class="v">${fmt(r.baseline.speedup, 2)}×　${deltaTxt}（相对本次）</div>` : ''}
     <div class="k">TTFT miss → hit</div><div class="v">${fmt(s.ttft_miss_med)} ms → ${fmt(s.ttft_hit_med)} ms（中位）</div>
@@ -948,7 +1055,7 @@ function cacheResultHtml(r) {
     <div class="k">命中请求</div><div class="v">${fmt(s.hit_requests)} / ${fmt(s.ok_rounds)} 成功轮</div>
     <div class="k">上报 cached</div><div class="v">${s.provider_reported ? '是' : '否（未返回缓存字段）'}</div>
   </div>
-  ${(s.notes || []).length ? `<div class="hint" style="color:var(--muted)">${s.notes.map(esc).join('；')}</div>` : ''}`;
+  ${(s.notes || []).length ? `<div class="hint" style="color:var(--tx-2)">${s.notes.map(esc).join('；')}</div>` : ''}`;
   const rows = (r.rounds || []).map((it, i) => `<tr>
     <td class="num">${it.seq}</td>
     <td><span class="badge ${it.ok ? 'ok' : 'no'}">${it.ok ? (i === 0 ? '写入' : (it.cached_tokens > 0 ? '命中' : '未命中')) : (it.error_class || 'FAIL')}</span></td>
@@ -962,7 +1069,7 @@ function cacheResultHtml(r) {
     <th class="num">#</th><th>Result</th><th class="num">TTFT</th><th class="num">E2EL</th>
     <th class="num">Cached</th><th class="num">Write</th><th class="num">in tok</th><th>Error</th>
     </tr></thead><tbody>${rows}</tbody></table></div>`;
-  return `<div style="margin:0 0 6px">${cacheVerdictBadge(s.verdict)} <b>${esc(r.name)}</b> <span class="mono" style="color:var(--muted)">${esc(r.model)}</span></div>
+  return `<div style="margin:0 0 6px">${cacheVerdictBadge(s.verdict)} <b>${esc(r.name)}</b> <span class="mono" style="color:var(--tx-2)">${esc(r.model)}</span></div>
     ${kv}${table}`;
 }
 async function renderCacheHist() {
@@ -976,14 +1083,14 @@ async function renderCacheHist() {
         <td class="mono">${dtstr(c.ts)}</td>
         <td>${esc(c.name)}</td><td class="mono">${esc(c.model)}</td>
         <td class="num">${fmt(s.speedup, 2)}×</td>
-        <td>${cacheVerdictBadge(s.verdict)}${c.is_baseline ? ' <span class="mono" style="color:var(--acc-bright);font-size:10.5px">基线</span>' : ''}</td>
+        <td>${cacheVerdictBadge(s.verdict)}${c.is_baseline ? ' <span class="mono" style="color:var(--acc-hi);font-size:10.5px">基线</span>' : ''}</td>
         <td class="act">
           <button class="mini ghost" data-cact="view" data-cid="${c.id}">查看</button>
           <button class="mini ghost" data-cact="base" data-cid="${c.id}">设基线</button>
           <button class="mini ghost" data-cact="del" data-cid="${c.id}">删</button>
         </td></tr>`;
     }).join('');
-    box.innerHTML = `<h4 style="color:var(--ink);font-size:12px;font-weight:600;margin:14px 0 6px">检测历史</h4>
+    box.innerHTML = `<h4 style="color:var(--tx-1);font-size:12px;font-weight:600;margin:14px 0 6px">检测历史</h4>
       <div class="table-scroll"><table class="grid"><thead><tr>
         <th>时间</th><th>Channel</th><th>Model</th><th class="num">加速比</th><th>判定</th><th class="act">Actions</th>
         </tr></thead><tbody>${rows || '<tr><td colspan="6" class="hint">还没有检测记录。点「缓存检测」跑一次，就能看到这条渠道的缓存是否真实生效。</td></tr>'}</tbody></table></div>`;
@@ -1077,18 +1184,25 @@ async function loadHistory() {
     const d = await fetchJSON('/api/runs');
     const recent = d.runs.slice(0, 8).reverse();
     const newest = d.runs[0] && d.runs[0].run_id;
-    for (const r of recent) {
-      if (state.runs.has(r.run_id)) continue;
-      const [det, smp] = await Promise.all([fetchJSON(`/api/runs/${r.run_id}`), fetchJSON(`/api/runs/${r.run_id}/samples?max_points=4000`)]);
+    const loaded = await Promise.all(recent.map(async (r) => {
+      if (state.runs.has(r.run_id)) return null;
+      try {
+        const [det, smp] = await Promise.all([fetchJSON(`/api/runs/${r.run_id}`), fetchJSON(`/api/runs/${r.run_id}/samples?max_points=4000`)]);
+        return { r, det, smp };
+      } catch { return null; }
+    }));
+    for (const item of loaded) {
+      if (!item) continue;
+      const { r, det, smp } = item;
       const t = det.run && det.run.params_json ? JSON.parse(det.run.params_json).targets[0] : { name: r.run_id, model: r.model };
-      const run = { id: r.run_id, target: t.name, model: r.model, provider: r.provider, status: det.status, samples: smp.samples || [], summary: det.summary, slo: det.run ? JSON.parse(det.run.slo_json || '{}') : {}, mode: det.run && det.run.params_json ? (JSON.parse(det.run.params_json).mode || 'closed') : 'closed', randomize: det.run && det.run.params_json ? !!JSON.parse(det.run.params_json).randomize : undefined, promptMode: det.run && det.run.params_json ? (JSON.parse(det.run.params_json).traffic || {}).prompt_mode : undefined, color: C.series[state.colorIdx++ % C.series.length], sse: null };
+      const run = { id: r.run_id, target: t.name, model: r.model, provider: r.provider, status: det.status, samples: smp.samples || [], summary: det.summary, slo: det.run ? JSON.parse(det.run.slo_json || '{}') : {}, mode: det.run && det.run.params_json ? (JSON.parse(det.run.params_json).mode || 'closed') : 'closed', randomize: det.run && det.run.params_json ? !!JSON.parse(det.run.params_json).randomize : undefined, promptMode: det.run && det.run.params_json ? (JSON.parse(det.run.params_json).traffic || {}).prompt_mode : undefined, color: C.series[state.colorIdx++ % C.series.length], sse: null, sseOpen: false };
       state.runs.set(r.run_id, run);
     }
     // 默认主视图：在**已加载的这 8 条**里挑"样本充足"的最近一条
     // （在全部历史里挑会选到没加载的运行，导致 state.primary 落空、图表不渲染）
-    const loaded = recent.filter((r) => (r.total || 0) >= 10);
+    const okRecent = recent.filter((r) => (r.total || 0) >= 10);
     const pick = state.primary
-      || (loaded.length ? loaded[loaded.length - 1].run_id : null)
+      || (okRecent.length ? okRecent[okRecent.length - 1].run_id : null)
       || newest;
     if (pick && state.runs.has(pick)) {
       state.primary = pick;
@@ -1098,9 +1212,9 @@ async function loadHistory() {
       state.primary = [...state.runs.keys()].pop();
       renderCards(state.runs.get(state.primary).summary);
     }
-    renderRuns(); renderCompareTable(); renderAll();
+    renderRuns(); renderCompareTable(); renderAll(); refreshTopbar();
     if (recent.length) log('info', `已恢复 ${recent.length} 条历史运行`);
-  } catch { /* ignore */ }
+  } catch (e) { log('warn', '历史加载失败: ' + (e && e.message)); }
 }
 
 /* ---------- 指标口径说明 ---------- */
@@ -1138,7 +1252,7 @@ function showGlossary() {
 UI.setPaletteProvider(() => {
   const cmds = [
     { label: '开始性能测试', sub: '⌘/Ctrl+Enter', action: doStart },
-    { label: '解析供应商配置', sub: '⌘/Ctrl+K', action: doParse },
+    { label: '解析供应商配置', sub: '识别配置', action: doParse },
     { label: '探活测速', action: doProbe },
     { label: '拉取模型列表', action: doModels },
     { label: '缓存检测（验证 Prompt Cache）', action: doCacheCheck },
@@ -1212,8 +1326,12 @@ document.addEventListener('keydown', (e) => {
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('#runsBody tr[data-run]')) {
     e.preventDefault(); openRunDetail(e.target.dataset.run); return;
   }
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); doStart(); }
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); doParse(); }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    // ⌘Enter 跟当前视图走：降智页启动降智，否则启动压测
+    if (location.hash === '#bench' && typeof window.__benchStart === 'function') window.__benchStart();
+    else doStart();
+  }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') { e.preventDefault(); toggleSidebar(); }
 });
 $('btnSidebar').onclick = toggleSidebar;
@@ -1477,7 +1595,6 @@ function initPinParams() {
 if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
 
 loadCfg();
-requestAnimationFrame(mountHero);   // 全局玻璃场景常驻
 initPinParams();
 initPanelResize();
 setSidebar(localStorage.getItem('llmbench.sidebar') !== '0');

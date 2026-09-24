@@ -34,7 +34,7 @@ from .schemas import (
     TrafficConfig,
 )
 from .stats import lttb
-from .store import Store
+from .store import Store, _mask
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
@@ -272,8 +272,10 @@ async def api_stream(run_id: str):
         q = engine.subscribe(run_id)
         try:
             yield f"data: {json.dumps({'type': 'status', 'status': st.status.value})}\n\n"
+            if st.last_phase:
+                yield f"data: {json.dumps(st.last_phase)}\n\n"
             if st.samples:
-                yield f"data: {json.dumps({'type': 'summary', 'data': engine.live_summary(st)})}\n\n"
+                yield f"data: {json.dumps({'type': 'summary', 'live': True, 'data': engine.live_summary(st)})}\n\n"
             while True:
                 try:
                     event = await asyncio.wait_for(q.get(), timeout=15)
@@ -429,11 +431,15 @@ async def api_probe(body: ProbeBody):
                 "error_msg": str(exc)[:300],
             }
 
+    from .providers import is_loopback
+
+    trust = not any(is_loopback(t.base_url) for t in body.targets)
     async with httpx.AsyncClient(
         timeout=body.timeout_s,
         limits=limits,
         proxy=body.proxy or None,
         verify=body.verify_tls,
+        trust_env=trust and not body.proxy,
     ) as client:
         results = await asyncio.gather(*[one(client, t) for t in body.targets])
     return {"results": results}
@@ -448,8 +454,14 @@ class ModelsBody(BaseModel):
 
 @app.post("/api/targets/models")
 async def api_models(body: ModelsBody):
+    from .providers import is_loopback
+
+    trust = not any(is_loopback(t.base_url) for t in body.targets)
     async with httpx.AsyncClient(
-        timeout=body.timeout_s, proxy=body.proxy or None, verify=body.verify_tls
+        timeout=body.timeout_s,
+        proxy=body.proxy or None,
+        verify=body.verify_tls,
+        trust_env=trust and not body.proxy,
     ) as client:
         out = {}
         for t in body.targets:
@@ -770,7 +782,8 @@ async def api_cache_check(body: CacheCheckBody):
     )
     results = await cache_mod.run(body.targets, p)
     for r in results:
-        base = await store.get_cache_baseline(r["base_url"], r["model"])
+        # 与 set_cache_baseline / list 一致：键用 masked URL
+        base = await store.get_cache_baseline(_mask(r["base_url"]), r["model"])
         r["baseline"] = (
             {"check_id": base["check_id"], "speedup": base.get("speedup")}
             if base

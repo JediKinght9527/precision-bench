@@ -80,6 +80,7 @@ class RunState:
     max_consecutive_fail: int = 0
     t0_mono: float = 0.0
     last_summary_at: float = 0.0
+    last_phase: dict | None = None
 
 
 KEEP_FINISHED = 40  # 已结束的运行最多在内存里保留多少个（超出按结束时间淘汰）
@@ -190,12 +191,18 @@ class Engine:
             if not cfg.connection_reuse
             else max(20, cfg.concurrency * 2),
         )
+        # 回环直连：避免 Clash/系统代理截 127.0.0.1 → 502（getproxies 不读例外表）
+        from .providers import is_loopback
+
+        urls = [t.base_url for t in (cfg.targets or [])]
+        trust = not any(is_loopback(u) for u in urls) if urls else True
         return httpx.AsyncClient(
             timeout=httpx.Timeout(cfg.timeout_s, connect=min(30.0, cfg.timeout_s)),
             limits=limits,
             proxy=cfg.proxy or None,
             verify=cfg.verify_tls,
             http2=False,
+            trust_env=trust and cfg.proxy is None,
         )
 
     async def _drive(self, st: RunState) -> None:
@@ -336,6 +343,17 @@ class Engine:
                 },
             },
         )
+        # 运行中周期推 live summary（≥1s 节流），否则 KPI/判定/顶栏要等结束才动
+        now = time.monotonic()
+        if st.samples and now - st.last_summary_at >= 1.0:
+            st.last_summary_at = now
+            try:
+                self._emit(
+                    st,
+                    {"type": "summary", "live": True, "data": self.live_summary(st)},
+                )
+            except Exception:  # noqa: BLE001 — 汇总失败不该打断压测
+                pass
 
     async def _run_closed(self, st: RunState, client: httpx.AsyncClient) -> None:
         cfg = st.cfg
@@ -394,20 +412,26 @@ class Engine:
             *[asyncio.create_task(worker()) for _ in range(max(1, cfg.concurrency))]
         )
 
+    def _emit_phase(self, st: RunState, ev: dict) -> None:
+        st.last_phase = ev
+        self._emit(st, ev)
+
     async def _warmup(self, st: RunState, client: httpx.AsyncClient) -> None:
-        """预热：会发进度事件，界面上能看到"预热中 i/n"，不会像死了一样。"""
-        n = max(0, st.cfg.warmup)
+        cfg = st.cfg
+        n = max(0, int(cfg.warmup))
         if n <= 0:
             return
-        self._emit(st, {"type": "phase", "phase": "warmup", "done": 0, "total": n})
+        self._emit_phase(
+            st, {"type": "phase", "phase": "warmup", "done": 0, "total": n}
+        )
         for i in range(n):
             if st.stop_flag:
                 return
             await self._fire(st, client, None, warmup=True)
-            self._emit(
+            self._emit_phase(
                 st, {"type": "phase", "phase": "warmup", "done": i + 1, "total": n}
             )
-        self._emit(st, {"type": "phase", "phase": "steady"})
+        self._emit_phase(st, {"type": "phase", "phase": "steady"})
 
     async def _run_open(self, st: RunState, client: httpx.AsyncClient) -> None:
         cfg = st.cfg

@@ -26,6 +26,7 @@ import httpx
 from . import providers
 from .engine import _gen_text
 from .schemas import RunConfig, Target, TrafficConfig
+from .store import _mask
 
 
 @dataclass
@@ -184,12 +185,16 @@ class CacheCheckManager:
         p = p.sanitized()
         out: list[dict] = []
         limits = httpx.Limits(max_connections=4, max_keepalive_connections=2)
+        from .providers import is_loopback
+
+        trust = not any(is_loopback(t.base_url) for t in targets)
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(p.timeout_s, connect=min(30.0, p.timeout_s)),
             limits=limits,
             proxy=p.proxy or None,
             verify=p.verify_tls,
             http2=False,
+            trust_env=trust and not p.proxy,
         ) as client:
             for t in targets:
                 try:
@@ -255,7 +260,7 @@ class CacheCheckManager:
             "provider": target.provider.value,
             "model": target.model,
             "base_url": target.base_url,
-            "base_url_masked": target.base_url,  # 与 store._mask 约定一致
+            "base_url_masked": _mask(target.base_url),
             "params": p.__dict__,
             "rounds": rounds,
             "summary": summary,

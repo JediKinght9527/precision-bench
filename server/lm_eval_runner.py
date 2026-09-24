@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from . import bench_data
 from .schemas import Provider, Target
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -470,7 +471,7 @@ def parse(
 
         n = len(per_item)
         k = sum(1 for v in per_item.values() if v)
-        dims[meta["dim"]] = {
+        entry = {
             "name": meta["label"],
             "bench": f"lm-eval:{task}",
             "task": task,
@@ -486,6 +487,30 @@ def parse(
             "leaves": len(leaves),
             "logprobs_required": bool(meta.get("logprobs")),
         }
+        # 多任务可共享同一 dim（mmlu/arc/hellaswag → knowledge）：合并而非覆盖
+        if meta["dim"] in dims:
+            prev = dims[meta["dim"]]
+            prev.setdefault("tasks", [])
+            # 旧数据可能是单任务字符串
+            old = prev.get("task")
+            if old and not prev["tasks"]:
+                prev["tasks"] = [t for t in str(old).split(",") if t]
+            if task not in prev["tasks"]:
+                prev["tasks"].append(task)
+            prev_n, prev_p = prev.get("n", 0), prev.get("passed", 0)
+            tot_n = prev_n + n
+            prev["name"] = (
+                bench_data.DIMENSIONS.get(meta["dim"], {}).get("name") or prev["name"]
+            )
+            prev["bench"] = "lm-eval:" + ",".join(prev["tasks"])
+            prev["task"] = ",".join(prev["tasks"])
+            prev["n"] = tot_n
+            prev["passed"] = prev_p + k
+            prev["total"] = prev.get("total", 0) + n
+            if tot_n:
+                prev["score"] = round(prev["passed"] / tot_n, 4)
+        else:
+            dims[meta["dim"]] = entry
         for iid in sorted(per_item):
             items.append(
                 {

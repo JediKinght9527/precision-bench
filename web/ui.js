@@ -7,15 +7,24 @@
 (function () {
   'use strict';
 
+  /* 调色板从 CSS 变量读取，与 style.css 单源同步 */
+  const _css = getComputedStyle(document.documentElement);
+  const _v = (n, fb) => (_css.getPropertyValue(n) || fb).trim() || fb;
   const C = {
-    tx1: '#f6f3ee', tx2: '#b0a99e', tx3: '#827b72',
-    line: 'rgba(255,250,240,.085)', line2: 'rgba(255,250,240,.16)',
-    acc: '#e0a84f', acc2: '#f0c56e',
-    ok: '#3dd68c', warn: '#f5b942', bad: '#ff6b5b', info: '#7dd3c8',
-    cyan: '#5ec8b8', pink: '#ff7a8a', purple: '#d4a5e8', orange: '#f0c56e',
-    blue: '#7eb6ff', green: '#3dd68c', yellow: '#f5b942', red: '#ff6b5b',
-    tr1: '#5ec8b8', tr2: '#ff7a8a', tr3: '#f0c56e', tr4: '#7eb6ff', tr5: '#d4a5e8',
-    series: ['#5ec8b8', '#ff7a8a', '#f0c56e', '#7eb6ff', '#d4a5e8', '#3dd68c', '#f5b942', '#ff6b5b'],
+    tx1: _v('--tx-1', '#ffffff'), tx2: _v('--tx-2', '#9b9b9b'), tx3: _v('--tx-3', '#6b6b6b'),
+    line: _v('--line', 'rgba(255,255,255,.08)'), line2: _v('--line-2', 'rgba(255,255,255,.12)'),
+    acc: _v('--acc', '#76b900'), acc2: _v('--acc-hi', '#8ad600'),
+    ok: _v('--ok', '#76b900'), warn: _v('--warn', '#ffb800'), bad: _v('--bad', '#ff4d4f'), info: _v('--info', '#4086f4'),
+    yellow: _v('--warn', '#ffb800'),
+    tr1: _v('--tr-1', '#76b900'), tr2: _v('--tr-2', '#8ad600'), tr3: _v('--tr-3', '#a3e635'),
+    tr4: _v('--tr-4', '#4d8a00'), tr5: _v('--tr-5', '#c6f96b'),
+    /* 绿系为主，语义色垫底防撞 */
+    series: [
+      _v('--tr-1', '#76b900'), _v('--tr-2', '#8ad600'), _v('--tr-3', '#a3e635'),
+      _v('--tr-4', '#4d8a00'), _v('--tr-5', '#c6f96b'),
+      _v('--bad', '#ff4d4f'), _v('--warn', '#ffb800'), _v('--info', '#4086f4'),
+    ],
+    bg0: _v('--bg-0', '#000000'), bg1: _v('--bg-1', '#0b0b0b'),
   };
 
   const $ = (id) => document.getElementById(id);
@@ -35,29 +44,39 @@
   const dtstr = (ts) => _dtf.format(new Date(ts * 1000));
   const nowTime = () => _tfHMS.format(new Date());
 
-  /* ---------- ECharts 主题 ---------- */
+  /* ---------- ECharts 主题 · NVIDIA ---------- */
   echarts.registerTheme('llmbench', {
     color: C.series,
     backgroundColor: 'transparent',
-    textStyle: { color: C.tx1, fontSize: 12, fontFamily: '-apple-system, "SF Pro Text", "PingFang SC", sans-serif' },
+    textStyle: { color: C.tx1, fontSize: 12, fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace' },
     title: { textStyle: { color: C.tx1, fontSize: 13, fontWeight: 600 } },
-    line: { lineStyle: { width: 2, cap: 'round', join: 'round' }, symbol: 'none', smooth: 0.25 },
+    line: {
+      lineStyle: { width: 2, cap: 'round', join: 'round', shadowColor: 'rgba(0,0,0,.35)', shadowBlur: 4, shadowOffsetY: 1 },
+      symbol: 'none', smooth: 0.25,
+    },
     categoryAxis: {
       axisLine: { lineStyle: { color: C.line2 } }, axisTick: { show: false },
-      axisLabel: { color: C.tx3, fontSize: 11 }, splitLine: { show: false },
+      axisLabel: { color: C.tx3, fontSize: 11, fontFamily: 'ui-monospace, monospace' }, splitLine: { show: false },
     },
     valueAxis: {
       axisLine: { show: false }, axisTick: { show: false },
-      axisLabel: { color: C.tx3, fontSize: 11 },
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,.055)' } },
+      axisLabel: { color: C.tx3, fontSize: 11, fontFamily: 'ui-monospace, monospace' },
+      splitLine: { lineStyle: { color: 'rgba(255,255,255,.06)' } },
     },
     legend: { textStyle: { color: C.tx2, fontSize: 11 } },
+    tooltip: {
+      backgroundColor: 'rgba(18,18,18,.96)',
+      borderColor: 'rgba(118,185,0,.4)',
+      borderWidth: 1,
+      textStyle: { color: C.tx1, fontSize: 12 },
+      extraCssText: 'border-radius:6px;box-shadow:0 8px 28px rgba(0,0,0,.55);backdrop-filter:blur(10px);',
+    },
   });
 
-  const AXIS = { color: C.tx3, fontSize: 11, fontFamily: '-apple-system, "SF Pro Text", "PingFang SC", sans-serif' };
-  const SPLIT = { lineStyle: { color: 'rgba(255,255,255,.055)', width: 1 } };
-  const GRAT = { show: true, lineStyle: { color: 'rgba(255,255,255,.042)', width: 1 } };
-  const MINOR = { show: true, lineStyle: { color: 'rgba(255,255,255,.018)', width: 1 } };
+  const AXIS = { color: C.tx3, fontSize: 11, fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace' };
+  const SPLIT = { lineStyle: { color: 'rgba(255,255,255,.06)', width: 1 } };
+  const GRAT = { show: true, lineStyle: { color: 'rgba(255,255,255,.05)', width: 1 } };
+  const MINOR = { show: true, lineStyle: { color: 'rgba(255,255,255,.025)', width: 1 } };
   const GRID = { left: 56, right: 18, top: 26, bottom: 30 };
 
   const grad = (hex, a1 = 0.22, a2 = 0) => new echarts.graphic.LinearGradient(0, 0, 0, 1, [
@@ -70,15 +89,15 @@
 
   function tooltip(unit = '', nd = 1) {
     return {
-    backgroundColor: 'rgba(12,13,17,.88)', borderColor: 'rgba(255,255,255,.14)', borderWidth: 1,
-    padding: [9, 11], textStyle: { color: C.tx1, fontSize: 12, fontFamily: '-apple-system, "SF Pro Text", "PingFang SC", sans-serif' },
-    extraCssText: 'border-radius:14px;box-shadow:0 18px 44px rgba(0,0,0,.6);-webkit-backdrop-filter:blur(28px) saturate(1.4);backdrop-filter:blur(28px) saturate(1.4);',
+    backgroundColor: 'rgba(18,18,18,.96)', borderColor: 'rgba(118,185,0,.4)', borderWidth: 1,
+    padding: [10, 12], textStyle: { color: C.tx1, fontSize: 12, fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace' },
+    extraCssText: 'border-radius:6px;box-shadow:0 8px 28px rgba(0,0,0,.55);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);',
       trigger: 'axis',
       axisPointer: {
         type: 'cross',
-        crossStyle: { color: C.tx3, width: 1 },
-        lineStyle: { color: 'rgba(255,255,255,.22)', type: 'dashed', width: 1 },
-        label: { backgroundColor: 'rgba(62,66,74,.92)', color: C.tx1, fontSize: 11, borderRadius: 6, padding: [3, 7], fontFamily: '-apple-system, sans-serif' },
+        crossStyle: { color: C.tr1, width: 1 },
+        lineStyle: { color: 'rgba(118,185,0,.35)', type: 'dashed', width: 1 },
+        label: { backgroundColor: 'rgba(26,26,26,.96)', color: C.tx1, fontSize: 11, borderRadius: 4, padding: [3, 7], fontFamily: 'ui-monospace, monospace', borderColor: 'rgba(118,185,0,.35)', borderWidth: 1 },
       },
       formatter: (ps) => {
         if (!ps || !ps.length) return '';
@@ -89,8 +108,8 @@
           v = Number(v).toFixed(nd);
           h += `<div style="display:flex;align-items:center;gap:9px;min-width:180px;line-height:1.9">
             <span style="width:8px;height:8px;border-radius:50%;background:${p.color};flex:none"></span>
-            <span style="color:#c9c9d2">${p.seriesName}</span>
-            <b style="margin-left:auto;font-variant-numeric:tabular-nums;font-family:inherit;font-variant-numeric:tabular-nums;font-weight:500">${v}${unit ? ' <span style="color:#6e6e7d;font-weight:400">' + unit + '</span>' : ''}</b></div>`;
+            <span style="color:${C.tx2}">${p.seriesName}</span>
+            <b style="margin-left:auto;font-variant-numeric:tabular-nums;font-family:inherit;font-weight:500">${v}${unit ? ` <span style="color:${C.tx3};font-weight:400">${unit}</span>` : ''}</b></div>`;
         });
         return h;
       },
@@ -136,46 +155,117 @@
     inst.clear();
     inst.setOption({
       backgroundColor: 'transparent',
-      graphic: { type: 'text', left: 'center', top: 'middle', style: { text, fill: C.tx3, fontSize: 12.5 } },
+      graphic: [
+        { type: 'text', left: 'center', top: 'middle', style: { text, fill: C.tx2, fontSize: 13, fontWeight: 500 } },
+        { type: 'text', left: 'center', top: 'middle', style: { text: '\n\n本次运行暂无可用样本', fill: C.tx4, fontSize: 11 } },
+      ],
       xAxis: { show: false }, yAxis: { show: false }, series: [],
     }, true);
   }
 
   /* ---------- Toast ---------- */
-  function toast(msg, type = 'info', ms = 3200) {
+  function toast(msg, type = 'info', ms) {
+    if (ms == null) ms = type === 'err' ? 8000 : type === 'warn' ? 4500 : 3200;
     const box = $('toasts');
     if (!box) return;
+    while (box.children.length >= 4) box.firstChild.remove();
     const el = document.createElement('div');
     el.className = `toast t-${type}`;
     const icon = type === 'ok' ? '✓' : type === 'err' ? '✕' : type === 'warn' ? '!' : 'i';
-    el.innerHTML = `<span class="tico">${icon}</span><span>${esc(msg)}</span>`;
+    el.innerHTML = `<span class="tico">${icon}</span><span>${esc(msg)}</span><button class="tx" type="button" aria-label="关闭">×</button>`;
     box.appendChild(el);
-    setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 220); }, ms);
+    let t = setTimeout(dismiss, ms);
+    function dismiss() { el.classList.add('out'); setTimeout(() => el.remove(), 220); }
+    function pause() { clearTimeout(t); }
+    function resume() { clearTimeout(t); t = setTimeout(dismiss, 1200); }
+    el.addEventListener('mouseenter', pause);
+    el.addEventListener('mouseleave', resume);
+    el.addEventListener('click', (e) => { clearTimeout(t); dismiss(); });
+    el.querySelector('.tx')?.addEventListener('click', (e) => { e.stopPropagation(); clearTimeout(t); dismiss(); });
+  }
+
+  /* 按钮三段式：idle → busy(spinner+文案) → idle，保留原文案 */
+  function setBusy(btn, busy, label) {
+    if (!btn) return;
+    if (busy) {
+      if (btn.dataset.busy === '1') return;
+      btn.dataset.busy = '1';
+      btn.dataset.orig = btn.textContent;
+      btn.disabled = true;
+      btn.setAttribute('aria-busy', 'true');
+      btn.classList.add('is-busy');
+      if (label) btn.textContent = label;
+    } else if (btn.dataset.busy === '1') {
+      delete btn.dataset.busy;
+      btn.disabled = false;
+      btn.removeAttribute('aria-busy');
+      btn.classList.remove('is-busy');
+      if (btn.dataset.orig != null) { btn.textContent = btn.dataset.orig; delete btn.dataset.orig; }
+    }
   }
 
   /* ---------- 通用弹窗 ---------- */
-  function openModal(title, html) { $('modalTitle').textContent = title; $('modalBody').innerHTML = html; $('modal').hidden = false; }
-  function closeModal() { $('modal').hidden = true; }
+  let lastFocus = null;
+  function openModal(title, html) {
+    lastFocus = document.activeElement;
+    $('modalTitle').textContent = title; $('modalBody').innerHTML = html; $('modal').hidden = false;
+    $('modalClose')?.focus();
+  }
+  function closeModal() {
+    if ($('modal').hidden) return;
+    $('modal').hidden = true;
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+    lastFocus = null;
+  }
 
   /* ---------- 确认框 ---------- */
   let confirmResolve = null;
   function confirmBox(msg, title = '确认操作', danger = true) {
+    lastFocus = document.activeElement;
     $('confirmTitle').textContent = title;
     $('confirmMsg').textContent = msg;
     $('confirmYes').className = danger ? 'danger' : 'primary';
     $('confirm').hidden = false;
+    $('confirmYes')?.focus();
     return new Promise((res) => { confirmResolve = res; });
   }
+  function settleConfirm(v) {
+    if ($('confirm').hidden) return;
+    $('confirm').hidden = true;
+    const r = confirmResolve; confirmResolve = null;
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+    lastFocus = null;
+    r && r(v);
+  }
   document.addEventListener('click', (e) => {
-    if (e.target.id === 'confirmYes') { $('confirm').hidden = true; confirmResolve && confirmResolve(true); confirmResolve = null; }
-    if (e.target.id === 'confirmNo') { $('confirm').hidden = true; confirmResolve && confirmResolve(false); confirmResolve = null; }
+    if (e.target.id === 'confirmYes') settleConfirm(true);
+    if (e.target.id === 'confirmNo') settleConfirm(false);
+    // 点遮罩取消（与 Esc 一致），避免误触卡死 await
+    if (e.target.id === 'confirm') settleConfirm(false);
     if (e.target.id === 'modalClose' || e.target.id === 'modal') closeModal();
   });
 
   /* ---------- 抽屉 ---------- */
-  function openDrawer(title, html) { $('drawerTitle').textContent = title; $('drawerBody').innerHTML = html; $('drawer').hidden = false; $('drawerMask').hidden = false; }
-  function closeDrawer() { $('drawer').hidden = true; $('drawerMask').hidden = true; }
+  function openDrawer(title, html) {
+    lastFocus = document.activeElement;
+    $('drawerTitle').textContent = title; $('drawerBody').innerHTML = html; $('drawer').hidden = false; $('drawerMask').hidden = false;
+    $('drawerClose')?.focus();
+  }
+  function closeDrawer() {
+    if ($('drawer').hidden) return;
+    $('drawer').hidden = true; $('drawerMask').hidden = true;
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+    lastFocus = null;
+  }
   document.addEventListener('click', (e) => { if (e.target.id === 'drawerClose' || e.target.id === 'drawerMask') closeDrawer(); });
+  // Esc 关闭最上层浮层：palette → confirm → modal → drawer
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!$('palette').hidden) { closePalette(); return; }
+    if (!$('confirm').hidden) { settleConfirm(false); return; }
+    if (!$('modal').hidden) { closeModal(); return; }
+    if (!$('drawer').hidden) { closeDrawer(); return; }
+  }, true);
 
   /* ---------- 面板菜单 ---------- */
   document.addEventListener('click', (e) => {
@@ -192,7 +282,7 @@
       const inst = ch && echarts.getInstanceByDom(ch);
       if (!inst) return;
       const a = document.createElement('a');
-      a.href = inst.getDataURL({ pixelRatio: 2, backgroundColor: '#08090c' });
+      a.href = inst.getDataURL({ pixelRatio: 2, backgroundColor: C.bg0 || '#09090b' });
       a.download = `llmbench-${panel.dataset.panel || 'panel'}-${Date.now()}.png`;
       a.click();
       toast('图表已导出 PNG', 'ok');
@@ -249,21 +339,22 @@
     if (e.target.id !== 'paletteInput') return;
     const q = e.target.value.trim().toLowerCase();
     paletteFiltered = (q ? paletteItems.filter((it) => (it.label + ' ' + (it.sub || '')).toLowerCase().includes(q)) : paletteItems).slice(0, 40);
-    paletteIdx = 0; renderPalette();
+    paletteIdx = 0; renderPalette(); scrollPalette();
   });
+  function scrollPalette() { document.getElementById(`pitem-${paletteIdx}`)?.scrollIntoView({ block: 'nearest' }); }
   document.addEventListener('keydown', (e) => {
     if (e.key === 'k' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); openPalette(); return; }
     if ($('palette').hidden) return;
     if (e.key === 'Escape') closePalette();
-    else if (e.key === 'ArrowDown') { e.preventDefault(); paletteIdx = Math.min(paletteIdx + 1, paletteFiltered.length - 1); renderPalette(); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); paletteIdx = Math.max(paletteIdx - 1, 0); renderPalette(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); paletteIdx = Math.min(paletteIdx + 1, paletteFiltered.length - 1); renderPalette(); scrollPalette(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); paletteIdx = Math.max(paletteIdx - 1, 0); renderPalette(); scrollPalette(); }
     else if (e.key === 'Enter') { e.preventDefault(); runPalette(paletteIdx); }
   });
 
   window.UI = {
     C, AXIS, SPLIT, GRAT, MINOR, GRID, fmt, pct, tstr, hm, dtstr, nowTime, esc, grad, hexA,
     tooltip, base, initChart, noData, axisLabelFor,
-    toast, openModal, closeModal, confirm: confirmBox,
+    toast, setBusy, openModal, closeModal, confirm: confirmBox,
     openDrawer, closeDrawer, sortable, setPaletteProvider, openPalette,
   };
 })();
