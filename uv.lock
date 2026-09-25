@@ -955,7 +955,7 @@ requires-dist = [
     { name = "lm-eval", extras = ["api"], specifier = ">=0.4.13" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "tiktoken", specifier = ">=0.7" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.53.0" },
 ]
 
 [package.metadata.requires-dev]
