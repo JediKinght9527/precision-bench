@@ -2,15 +2,18 @@
 (function () {
 'use strict';
 const $ = (id) => document.getElementById(id);
-const { fmt, pct, tstr, esc, nowTime, dtstr } = UI;
+const { fmt, pct, fmtTime, fmtTimeParts, tstr, esc, nowTime, dtstr } = UI;
 const C = UI.C;
 const AXIS = UI.AXIS, SPLIT = UI.SPLIT, GRAT = UI.GRAT, MINOR = UI.MINOR;
 
 const state = {
   targets: [], runs: new Map(), primary: null, colorIdx: 0, logs: [],
   filter: '', sort: { key: null, dir: 'asc' }, range: 0, autoRefresh: true,
-  reqSamples: [], reqOnlyFail: false, reqClass: '', reqSearch: '',
+  historyLoaded: false,
+  activeIds: [],
+  reqSamples: [], reqOnlyFail: false, reqClass: '', reqSearch: '', reportMarkdown: '',
 };
+let renderSignature = '';
 
 /* ---------- 工具 ---------- */
 /* 滚动分位。
@@ -132,7 +135,11 @@ const charts = {};
 try { echarts.connect([charts.e2e, charts.ttft, charts.tpot, charts.tput]); } catch (e) { /* 老版本忽略 */ }
 window.addEventListener('resize', () => Object.values(charts).forEach((c) => c && c.resize()));
 window.addEventListener('viewchange', (e) => {
-  if (e.detail.view === 'perf') requestAnimationFrame(() => Object.values(charts).forEach((c) => c && c.resize()));
+  if (e.detail.view === 'perf') {
+    renderSignature = '';
+    renderAll(true);
+    requestAnimationFrame(() => Object.values(charts).forEach((c) => c && c.resize()));
+  }
 });
 
 /* ---------- 结论带 ---------- */
@@ -143,8 +150,11 @@ window.addEventListener('viewchange', (e) => {
 function cacheDisplay(sum) {
   const run = state.primary ? state.runs.get(state.primary) : null;
   if (!sum || !sum.cache || !sum.tokens || !sum.tokens.in) return { text: '–', cls: '' };
-  if (run && run.randomize) return { text: 'n/a', cls: '' };
+  if (run && run.randomize && !run.cacheMode) return { text: 'n/a', cls: '' };
   if (run && run.promptMode === 'tiny') return { text: 'n/a', cls: '' };
+  if (sum.cache.reported === false && !(sum.cache.cached_tokens > 0)) {
+    return { text: 'n/a', cls: '', tip: '渠道未上报缓存字段（reported=false），命中率无法测得——见判定块说明或用「缓存检测」主动探测' };
+  }
   const r = sum.cache.hit_rate;
   return { text: pct(r), cls: r > 0 ? 'v-ok' : '' };
 }
@@ -152,6 +162,8 @@ function cacheDisplay(sum) {
 // 有失败时不给延迟上好颜色；一个都没成功则延迟无意义，显示 –
 const lat = (s, v, ok, warn) => (s.failed > 0 ? '' : v <= ok ? 'v-ok' : v <= warn ? 'v-warn' : 'v-bad');
 const lv = (s, v) => (s.ok ? fmt(v) : '–');
+/* 延迟读数：自适应 ms/s（≥1s 显秒），空值 – */
+const lvT = (s, v) => (s.ok ? fmtTime(v) : '–');
 // 指标命名对齐 vLLM / SGLang：TTFT / TPOT / ITL / E2EL，字段规律 {stat}_{metric}
 /* 读数区第一行 = 判定依据三要素（口径与判定一致：用 P95 + run.slo）；次级网格按重要性排序 */
 const SLO_DEF = { ttft_ms: 1500, tpot_ms: 50, e2e_ms: 5000 };
@@ -160,19 +172,19 @@ const runSlo = (run) => Object.assign({}, SLO_DEF, (run && run.slo) || {});
 const latSlo = (s, v, limit) => (s.failed > 0 || limit == null ? '' : v <= limit ? 'v-ok' : v <= limit * 1.5 ? 'v-warn' : 'v-bad');
 const PRIMARY_DEFS = [
   ['Success rate', (s) => pct(s.success_rate), '', (s) => s.success_rate >= 0.99 ? 'v-ok' : s.success_rate >= 0.95 ? 'v-warn' : 'v-bad', '请求成功率'],
-  ['TTFT P95', (s) => lv(s, s.ttft.p95), 'ms', (s, run) => latSlo(s, s.ttft.p95, runSlo(run).ttft_ms), 'Time To First Token 首字延迟 P95（与判定同口径：合格线见侧栏「合格线 · 延迟」）'],
-  ['E2EL P95', (s) => lv(s, s.e2e.p95), 'ms', (s, run) => latSlo(s, s.e2e.p95, runSlo(run).e2e_ms), 'End-to-End Latency 端到端 P95（与判定同口径：合格线见侧栏「合格线 · 延迟」）'],
+  ['TTFT P95', (s) => lvT(s, s.ttft.p95), '', (s, run) => latSlo(s, s.ttft.p95, runSlo(run).ttft_ms), 'Time To First Token 首字延迟 P95（与判定同口径：合格线见侧栏「合格线 · 延迟」）'],
+  ['E2EL P95', (s) => lvT(s, s.e2e.p95), '', (s, run) => latSlo(s, s.e2e.p95, runSlo(run).e2e_ms), 'End-to-End Latency 端到端 P95（与判定同口径：合格线见侧栏「合格线 · 延迟」）'],
 ];
 const METRIC_DEFS = [
-  ['RPS', (s) => fmt(s.rps, 2), 'req/s', () => '', '请求速率 = 完成请求数 / 墙钟'],
+  ['成功 RPS', (s) => fmt(s.rps, 2), 'req/s', () => '', '成功请求速率 = 成功请求数 / 墙钟；尝试速率见详情'],
   ['Output tok/s', (s) => fmt(s.tokens.output_throughput, 1), 'tok/s', () => 'v-info', '总输出 token / 墙钟时长（与 vLLM、SGLang 口径一致）；单请求解码口径见详情'],
-  ['Cache hit', (s) => cacheDisplay(s).text, '', (s) => cacheDisplay(s).cls, '缓存命中率 = 命中输入 token / 总输入 token。随机化开启或 prompt 过短时无法测量'],
-  ['Goodput', (s) => pct(s.goodput), '', (s) => s.goodput >= 0.9 ? 'v-ok' : 'v-warn', '达标请求占比；vLLM 的 request_goodput 是速率口径（req/s），见详情'],
-  ['TPOT', (s) => (s.measurable && !s.measurable.tpot ? 'n/a' : s.ok ? fmt(s.tpot.mean, 1) : '–'), 'ms', (s, run) => (s.measurable && !s.measurable.tpot ? '' : latSlo(s, s.tpot.mean, runSlo(run).tpot_ms)), 'Time Per Output Token 每 token 时间（均值着色用侧栏 tpot 合格线；判定块用 P95）'],
-  ['ITL P99', (s) => (s.measurable && !s.measurable.itl ? 'n/a' : fmt(s.itl.p99, 1)), 'ms', () => '', 'Inter-Token Latency 相邻 token 间隔的 P99（非流式不可测）'],
-  ['E2EL P50', (s) => lv(s, s.e2e.p50), 'ms', () => '', 'End-to-End Latency 端到端 P50'],
-  ['E2EL P99', (s) => lv(s, s.e2e.p99), 'ms', () => '', '端到端长尾；主流压测工具（k6/Locust）都会单列的尾分位'],
-  ['E2EL mean', (s) => lv(s, s.e2e.mean), 'ms', () => '', '端到端均值'],
+  ['Cache hit', (s) => { const d = cacheDisplay(s); return d.text; }, '', (s) => cacheDisplay(s).cls, '缓存命中率 = 命中输入 token / 总输入 token（token 口径）；请求 hit/miss 见判定块。随机化/过短 → n/a；渠道未上报字段 → n/a（非 0%）'],
+  ['Goodput', (s) => pct(s.goodput), '', (s) => s.goodput >= 0.9 ? 'v-ok' : 'v-warn', '达标请求占比（TTFT/E2E/TPOT 均≤合格线）；计入 SCORE（20 分）'],
+  ['TPOT', (s) => (s.measurable && !s.measurable.tpot ? 'n/a' : s.ok ? fmtTime(s.tpot.mean) : '–'), '', (s, run) => (s.measurable && !s.measurable.tpot ? '' : latSlo(s, s.tpot.mean, runSlo(run).tpot_ms)), 'Time Per Output Token 每 token 时间（均值着色用侧栏 tpot 合格线；判定块用 P95）'],
+  ['ITL P99', (s) => (s.measurable && !s.measurable.itl ? 'n/a' : s.ok ? fmtTime(s.itl.p99) : '–'), '', () => '', 'Inter-Token Latency 相邻 token 间隔的 P99（非流式不可测）'],
+  ['E2EL P50', (s) => lvT(s, s.e2e.p50), '', () => '', 'End-to-End Latency 端到端 P50'],
+  ['E2EL P99', (s) => lvT(s, s.e2e.p99), '', () => '', '端到端长尾；主流压测工具（k6/Locust）都会单列的尾分位'],
+  ['E2EL mean', (s) => lvT(s, s.e2e.mean), '', () => '', '端到端均值'],
   ['Checks', (s) => (s.ok > 0 && s.checks && s.checks.nonempty_rate != null ? pct(s.checks.nonempty_rate) : '–'), '', (s) => (s.ok > 0 && s.checks && s.checks.empty_output ? (s.checks.nonempty_rate >= 0.95 ? 'v-warn' : 'v-bad') : s.ok > 0 ? 'v-ok' : ''), '内容校验（k6 checks 口径）：成功请求中输出 token>0 的占比；0 token 通常意味着渠道返回 200 但空补全'],
   ['Cost', (s) => (s.cost && (s.cost.price_in > 0 || s.cost.price_out > 0) ? '¥' + fmt(s.cost.total, 4) : '未配置'), '', () => '', '总花费 = 输入×单价 + 输出×单价（在「合格线 · 成本」里填写单价后自动估算）'],
   ['Errors', (s) => fmt(s.failed), '', (s) => s.failed ? 'v-bad' : '', '失败请求数'],
@@ -191,14 +203,15 @@ function summaryEmpty() {
   $('vbTicks').innerHTML = ''; $('vbTicksCap').textContent = '最近请求';
 }
 
-/* 健康分 0–100：成功率 40 + 延迟三项各 20（相对合格线 1.0 满分，超线按比例扣） */
+/* 健康分 0–100：按本次 summary 实时核算 —— 成功率 30 + Goodput 20 + TTFT 15 + E2E 25 + TPOT 10 = 100
+   （延迟相对 run.slo 合格线；Goodput = 三项均达标的请求占比，直接反映「能用的请求」比例） */
 function healthScore(sum, run) {
   if (!sum || !sum.total) return null;
   const slo = runSlo(run);
   const clamp = (x) => Math.max(0, Math.min(1, x));
-  const sr = clamp((sum.success_rate ?? 0) / 1); // 已是 0–1
+  const sr = clamp(sum.success_rate ?? 0);
   const latPart = (v, limit) => {
-    if (v == null || !limit || !sum.ok) return 0.5; // 无样本中性
+    if (v == null || !limit || !sum.ok) return 0.5;
     if (v <= limit) return 1;
     if (v >= limit * 2) return 0;
     return clamp(1 - (v - limit) / limit);
@@ -206,16 +219,44 @@ function healthScore(sum, run) {
   const ttft = latPart(sum.ttft && sum.ttft.p95, slo.ttft_ms);
   const e2e = latPart(sum.e2e && sum.e2e.p95, slo.e2e_ms);
   const tpot = (sum.measurable && !sum.measurable.tpot) ? 0.5 : latPart(sum.tpot && sum.tpot.p95, slo.tpot_ms);
-  return Math.round(sr * 40 + ttft * 20 + e2e * 20 + tpot * 20);
+  const gp = sum.goodput != null ? clamp(sum.goodput) : (sum.ok ? (ttft + e2e + tpot) / 3 : 0.5);
+  // 满分 100：30+20+15+25+10
+  const score = Math.round(sr * 30 + gp * 20 + ttft * 15 + e2e * 25 + tpot * 10);
+  return score;
+}
+/* SCORE 明细 tooltip（挂在环上），让用户知道分是怎么来的 */
+function scoreBreakdown(sum, run) {
+  if (!sum || !sum.total) return '';
+  const slo = runSlo(run);
+  const clamp = (x) => Math.max(0, Math.min(1, x));
+  const sr = clamp(sum.success_rate ?? 0);
+  const latPart = (v, limit) => {
+    if (v == null || !limit || !sum.ok) return 0.5;
+    if (v <= limit) return 1;
+    if (v >= limit * 2) return 0;
+    return clamp(1 - (v - limit) / limit);
+  };
+  const ttft = latPart(sum.ttft && sum.ttft.p95, slo.ttft_ms);
+  const e2e = latPart(sum.e2e && sum.e2e.p95, slo.e2e_ms);
+  const tpot = (sum.measurable && !sum.measurable.tpot) ? 0.5 : latPart(sum.tpot && sum.tpot.p95, slo.tpot_ms);
+  const gp = sum.goodput != null ? clamp(sum.goodput) : (sum.ok ? (ttft + e2e + tpot) / 3 : 0.5);
+  return [
+    `成功率 ${pct(sr)} × 30 = ${(sr * 30).toFixed(1)}`,
+    `Goodput ${pct(gp)} × 20 = ${(gp * 20).toFixed(1)}`,
+    `TTFT ${fmtTime(sum.ttft && sum.ttft.p95)} / ${fmtTime(slo.ttft_ms)} × 15 = ${(ttft * 15).toFixed(1)}`,
+    `E2EL ${fmtTime(sum.e2e && sum.e2e.p95)} / ${fmtTime(slo.e2e_ms)} × 25 = ${(e2e * 25).toFixed(1)}`,
+    `TPOT ${sum.measurable && !sum.measurable.tpot ? 'n/a ×10 = 5.0（中性）' : `${fmtTime(sum.tpot && sum.tpot.p95)} / ${fmtTime(slo.tpot_ms)} × 10 = ${(tpot * 10).toFixed(1)}`}`,
+  ].join('\n');
 }
 
-function setScore(score) {
+function setScore(score, tip) {
   const ring = $('vbRing');
   const el = $('vbScore');
   if (!ring || !el) return;
-  if (score == null) { ring.style.setProperty('--score', 0); el.textContent = '–'; return; }
+  if (score == null) { ring.style.setProperty('--score', 0); el.textContent = '–'; ring.title = ''; return; }
   ring.style.setProperty('--score', String(score));
   el.textContent = String(score);
+  ring.title = tip || '';
 }
 
 /* 新运行开始：立刻清空上一次的残留（否则看起来像"没反应"） */
@@ -224,7 +265,9 @@ function renderRunning(run) {
   $('vbState').textContent = '运行中';
   setScore(null);
   $('vbNum').innerHTML = '—<span>ms</span>';
-  $('vbSub').innerHTML = run ? `<b>${esc(run.target)}　${esc(run.model)}</b>` : '';
+  $('vbSub').innerHTML = run
+    ? `<b>${esc(run.target === run.model ? run.target : `${run.target}　${run.model}`)}</b>`
+    : '';
   $('vbSlo').innerHTML = '';
   $('vbTicks').innerHTML = '';
   $('vbTicksCap').textContent = '等待连接…';
@@ -257,25 +300,45 @@ function renderCards(sum) {
   const v = evaluate(sum, run);
   const vb = $('verdictBlock');
   vb.className = 'verdict-block s-' + v.state + (p95 == null ? ' vb-empty' : '');
-  setScore(healthScore(sum, run));
+  setScore(healthScore(sum, run), scoreBreakdown(sum, run));
   $('vbState').textContent = v.label;
-  $('vbNum').innerHTML = p95 != null ? `${fmt(p95)}<span>ms</span>` : `—<span>ms</span>`;
-  const t = run ? `${run.target}　${run.model}` : '';
+  if (p95 != null) {
+    const tp = fmtTimeParts(p95);
+    $('vbNum').innerHTML = `${tp.v}<span>${tp.u}</span>`;
+  } else {
+    $('vbNum').innerHTML = `—<span>ms</span>`;
+  }
+  // target 与 model 同名时不重复显示（如渠道名直接填了模型名）
+  const t = run ? (run.target === run.model ? run.target : `${run.target}　${run.model}`) : '';
   const who = t ? `<b>${esc(t)}</b>` : '粘贴渠道配置并开始测试';
   let cacheLine = '';
   const c = sum.cache;
-  if (c && c.cached_tokens > 0) {
-    cacheLine = `　Cache hit ${pct(c.hit_rate)}（${c.requests_hit} 命中 / ${c.requests_miss} 未命中）`;
+  const cd = cacheDisplay(sum);
+  if (cd.text === 'n/a') {
+    cacheLine = '　Cache hit n/a（随机化/过短或渠道未上报字段，不可测）';
+    if (run && run.randomize) {
+      cacheLine += '。「随机化请求」已开启会破坏前缀——测缓存请关闭，或用「缓存检测」按钮';
+    } else if (cd.tip) {
+      cacheLine += `。${cd.tip}`;
+    }
+  } else if (c && c.cached_tokens > 0) {
+    cacheLine = `　Cache hit ${pct(c.hit_rate)}（token 口径 ${fmt(c.cached_tokens)}/${fmt(sum.tokens.in)}；请求 ${c.requests_hit} 命中 / ${c.requests_miss} 未命中）`;
     if (c.ttft_speedup) {
-      cacheLine += ` · TTFT ${fmt(c.ttft_hit.mean)} vs ${fmt(c.ttft_miss.mean)} ms（${c.ttft_speedup}×）`;
+      cacheLine += ` · TTFT ${fmtTime(c.ttft_hit.mean)} vs ${fmtTime(c.ttft_miss.mean)}（加速 ${c.ttft_speedup}×）`;
     }
   } else if (c && sum.measurable) {
-    cacheLine = '　Cache hit 0%（该渠道未返回缓存字段，或全部未命中）';
-    // 0% 命中的常见原因是自己配置导致：随机化破坏前缀、输入太短低于门槛
-    if ($('randomize')?.checked) {
-      cacheLine += '。注意：「随机化请求」已开启，每次前缀都不同，缓存必然不命中——测缓存请关闭它，或改用「缓存检测」按钮';
-    } else if (($('input_tokens')?.value | 0) < 256) {
-      cacheLine += '。注意：输入 token 数偏小（低于常见缓存门槛），建议 ≥1024 再观察命中';
+    if (c.reported === false) {
+      cacheLine = '　Cache hit n/a（渠道 usage 未上报缓存字段，命中率不可测）';
+      cacheLine += '。可用「缓存检测」主动探测（同前缀多轮 + TTFT 加速比交叉验证）';
+    } else {
+      cacheLine = '　Cache hit 0%（渠道已上报缓存字段，本轮全部未命中）';
+      if ($('randomize')?.checked) {
+        cacheLine += '。注意：「随机化请求」已开启，每次前缀都不同，缓存必然不命中——测缓存请关闭它，或改用「缓存检测」按钮';
+      } else if (($('input_tokens')?.value | 0) < 256) {
+        cacheLine += '。注意：输入 token 数偏小（低于常见缓存门槛），建议 ≥1024 再观察命中';
+      } else {
+        cacheLine += '。可用「缓存检测」主动探测（同前缀多轮 + TTFT 加速比交叉验证）';
+      }
     }
   }
   const noteCls = v.state === 'bad' ? 'is-bad' : v.state === 'warn' ? 'is-warn' : '';
@@ -294,9 +357,9 @@ function evaluate(sum, run) {
   const slo = runSlo(run);
   const rows = [
     { k: 'Success rate', v: sum.success_rate, limit: slo_rate(slo), cmp: '>=', bad: 0.95, show: pct },
-    { k: 'E2EL P95', v: sum.e2e ? sum.e2e.p95 : null, limit: slo.e2e_ms, cmp: '<=', show: (x) => fmt(x) + ' ms' },
-    { k: 'TTFT P95', v: sum.ttft ? sum.ttft.p95 : null, limit: slo.ttft_ms, cmp: '<=', show: (x) => fmt(x) + ' ms' },
-    { k: 'TPOT P95', v: sum.tpot ? sum.tpot.p95 : null, limit: slo.tpot_ms, cmp: '<=', show: (x) => fmt(x, 1) + ' ms' },
+    { k: 'E2EL P95', v: sum.e2e ? sum.e2e.p95 : null, limit: slo.e2e_ms, cmp: '<=', show: fmtTime },
+    { k: 'TTFT P95', v: sum.ttft ? sum.ttft.p95 : null, limit: slo.ttft_ms, cmp: '<=', show: fmtTime },
+    { k: 'TPOT P95', v: sum.tpot ? sum.tpot.p95 : null, limit: slo.tpot_ms, cmp: '<=', show: fmtTime },
   ];
   let bad = false, warn = false;
   const notes = [];
@@ -329,14 +392,17 @@ function renderTicks(run) {
   const box = $('vbTicks');
   if (!box) return;
   const S = run ? run.samples.slice(-64) : [];
-  if (!S.length) { box.innerHTML = ''; $('vbTicksCap').textContent = '最近请求'; return; }
+  if (!S.length) { box.innerHTML = ''; box.classList.remove('all-fail'); $('vbTicksCap').textContent = '最近请求'; return; }
+  const fails = S.filter((s) => !s.ok).length;
+  const allFail = fails === S.length;
   const lat = S.map((s) => s.e2e_ms || 0);
   const max = Math.max(...lat, 1);
+  /* 全失败时不画红墙：统一降调高度，靠文案表达失败 */
+  box.classList.toggle('all-fail', allFail);
   box.innerHTML = S.map((s) => {
-    const h = Math.max(12, Math.round((s.e2e_ms || 0) / max * 100));
-    return `<i class="${s.ok ? '' : 'f'}" style="height:${h}%" title="#${s.seq} ${s.ok ? fmt(s.e2e_ms) + ' ms' : (s.error_class || '失败')}"></i>`;
+    const h = allFail ? 55 : Math.max(12, Math.round((s.e2e_ms || 0) / max * 100));
+    return `<i class="${s.ok ? '' : 'f'}" style="height:${h}%" title="#${s.seq} ${s.ok ? fmtTime(s.e2e_ms) : (s.error_class || '失败')}"></i>`;
   }).join('');
-  const fails = S.filter((s) => !s.ok).length;
   const prog = run.requestCount ? ` · ${run.samples.length}/${run.requestCount}` : (run.samples.length ? ` · ${run.samples.length} 条` : '');
   $('vbTicksCap').textContent = `最近 ${S.length} 次请求${prog}${fails ? `，失败 ${fails}` : ''}`;
 }
@@ -382,9 +448,9 @@ function renderSingle(run) {
   } else {
   charts.e2e.setOption(UI.base({
     tooltip: UI.tooltip('ms'),
-    legend: { right: 8, top: 0, itemWidth: 14, itemHeight: 3, textStyle: { color: C.tx2, fontSize: 10 }, selected: dense ? { raw: false } : {}, data: run.mode === 'open' ? ['raw', 'P50', 'P95', 'corrected'] : ['raw', 'P50', 'P95'] },
+    legend: { right: 8, top: 0, itemWidth: 14, itemHeight: 3, textStyle: { color: C.tx2, fontSize: 11 }, selected: dense ? { raw: false } : {}, data: run.mode === 'open' ? ['raw', 'P50', 'P95', 'corrected'] : ['raw', 'P50', 'P95'] },
     xAxis: { type: 'category', boundaryGap: false, data: seqCat, name: 'seq', nameTextStyle: { color: C.tx3, fontSize: 10 }, axisLabel: { ...AXIS, interval: 'auto', hideOverlap: true }, axisLine: { lineStyle: { color: C.line2 } }, splitLine: { show: false } },
-    yAxis: { type: 'value', scale: true, splitNumber: 4, name: 'ms', nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: UI.axisLabelFor(e2e), ...robustRange(e2e), axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
+    yAxis: { type: 'value', scale: true, splitNumber: 4, nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: UI.axisLabelFor(e2e, 'ms'), name: (UI.axisLabelFor(e2e, 'ms').name || 'ms'), ...robustRange(e2e), axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
     series: [
       // 分位带：整段 polygon（P95 上沿 + P50 下沿），避免逐点半透明矩形叠出栅栏条纹
       ...(S.length >= MIN_BAND ? [{
@@ -398,7 +464,7 @@ function renderSingle(run) {
               kids.push({
                 type: 'polygon',
                 shape: { points: top.concat(bot.slice().reverse()) },
-                style: { fill: UI.hexA(C.tr3, .11), stroke: 'none' },
+                style: { fill: UI.grad(C.tr3, .07, 0), stroke: 'none' },
               });
             }
             top = []; bot = [];
@@ -414,7 +480,7 @@ function renderSingle(run) {
           return { type: 'group', children: kids };
         },
       }] : []),
-      { name: 'raw', type: 'scatter', symbolSize: dense ? 2 : 4, data: e2e, itemStyle: { color: '#8a8a8a', opacity: dense ? .18 : .35 }, z: 3},
+      { name: 'raw', type: 'scatter', symbolSize: dense ? 2 : 4, data: e2e, itemStyle: { color: '#8a8a8a', opacity: dense ? .12 : .24 }, z: 3},
       ln('P50', P50, C.tr1, 1.6, { z: 4 }),
       ln('P95', P95, C.tr3, 1.4, { lineStyle: { color: C.tr3, width: 1.4, type: 'dashed' }, z: 4 }),
       ...(run.mode === 'open'
@@ -431,8 +497,8 @@ function renderSingle(run) {
   charts.ttft.setOption(UI.base({
     tooltip: UI.tooltip('ms'),
     xAxis: { type: 'category', boundaryGap: false, data: seqCat, axisLabel: { ...AXIS, hideOverlap: true, interval: Math.max(0, Math.ceil(S.length / 6) - 1) }, axisLine: { lineStyle: { color: C.line2 } }, splitLine: { show: false }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
-    yAxis: { type: 'value', scale: true, splitNumber: 4, name: 'ms', nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: UI.axisLabelFor(ttft), ...robustRange(ttft), axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
-    series: [ln('TTFT', ttft, C.tr3, 1.4, { areaStyle: { color: UI.grad(C.tr3, .1, 0) }, markLine: sloLine(slo.ttft_ms, C.yellow) })],
+    yAxis: { type: 'value', scale: true, splitNumber: 4, nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: UI.axisLabelFor(ttft, 'ms'), name: (UI.axisLabelFor(ttft, 'ms').name || 'ms'), ...robustRange(ttft), axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
+    series: [ln('TTFT', ttft, C.tr3, 1.4, { areaStyle: { color: UI.grad(C.tr3, .06, 0) }, markLine: sloLine(slo.ttft_ms, C.yellow) })],
   }), true);
   }
 
@@ -442,8 +508,8 @@ function renderSingle(run) {
   charts.tpot.setOption(UI.base({
     tooltip: UI.tooltip('ms'),
     xAxis: { type: 'category', boundaryGap: false, data: seqCat, axisLabel: { ...AXIS, hideOverlap: true, interval: Math.max(0, Math.ceil(S.length / 6) - 1) }, axisLine: { lineStyle: { color: C.line2 } }, splitLine: { show: false }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
-    yAxis: { type: 'value', scale: true, splitNumber: 4, name: 'ms', nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: UI.axisLabelFor(tpot), ...robustRange(tpot), axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
-    series: [ln('TPOT', tpot, C.tr4, 1.4, { areaStyle: { color: UI.grad(C.tr4, .1, 0) }, markLine: sloLine(slo.tpot_ms, C.yellow) })],
+    yAxis: { type: 'value', scale: true, splitNumber: 4, nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: UI.axisLabelFor(tpot, 'ms'), name: (UI.axisLabelFor(tpot, 'ms').name || 'ms'), ...robustRange(tpot), axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
+    series: [ln('TPOT', tpot, C.tr4, 1.4, { areaStyle: { color: UI.grad(C.tr4, .08, 0) }, markLine: sloLine(slo.tpot_ms, C.yellow) })],
   }), true);
   }
 
@@ -521,7 +587,7 @@ function renderHeat(S) {
     yAxis: { type: 'category', name: '延迟', nameTextStyle: { color: C.tx3, fontSize: 11 }, data: ys.map((y) => yLabels[y]), axisLabel: AXIS, axisLine: { show: false }, splitLine: { show: false } },
     visualMap: {
       show: false, min: 0, max,
-      inRange: { color: ['rgba(30,30,30,.5)', 'rgba(50,80,0,.65)', 'rgba(76,138,0,.85)', '#76b900'] },
+      inRange: { color: ['rgba(30,35,45,.55)', 'rgba(90,70,20,.7)', 'rgba(180,120,30,.85)', '#f0b429'] },
     },
     series: [{ type: 'heatmap', data, itemStyle: { borderRadius: 4, borderColor: 'rgba(0,0,0,.25)', borderWidth: 1 }, emphasis: { itemStyle: { borderColor: C.tx1, borderWidth: 1 } } }],
   }), true);
@@ -604,7 +670,7 @@ function renderCompareChart() {
               textStyle: { color: C.tx2, fontSize: 10 }, data: series.map((x) => x.name) },
     grid: { left: 60, right: 20, top: 22, bottom: 46 },
     xAxis: { type: 'value', name: '相对时间(s)', nameTextStyle: { color: C.tx3, fontSize: 10 }, axisLabel: AXIS, axisLine: { lineStyle: { color: C.line2 } }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
-    yAxis: { type: 'value', scale: true, splitNumber: 4, name: 'E2E ms', nameLocation: 'middle', nameRotate: 90, nameGap: 44, nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: UI.axisLabelFor(series.flatMap((s) => s.data.map((p) => p[1]))), axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
+    yAxis: { type: 'value', scale: true, splitNumber: 4, nameLocation: 'middle', nameRotate: 90, nameGap: 44, nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: UI.axisLabelFor(series.flatMap((s) => s.data.map((p) => p[1])), 'ms'), name: (UI.axisLabelFor(series.flatMap((s) => s.data.map((p) => p[1])), 'ms').name || 'E2E'), axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
     series,
   }), true);
 }
@@ -644,9 +710,9 @@ function renderRuns() {
       <td>${statusBadge(r.status)}</td>
       <td class="num">${s.total ?? r.samples.length}</td>
       <td class="num">${s.ok != null ? s.ok : '–'}${s.success_rate != null ? ` <span class="mono" style="color:var(--tx-3)">${pct(s.success_rate)}</span>` : ''}</td>
-      <td class="num">${s.e2e ? fmt(s.e2e.p95) + ' ms' : '–'}</td>
-      <td class="num">${s.ttft ? fmt(s.ttft.mean) + ' ms' : '–'}</td>
-      <td class="num">${s.tpot ? fmt(s.tpot.mean, 1) + ' ms' : '–'}</td>
+      <td class="num">${s.e2e ? fmtTime(s.e2e.p95) : '–'}</td>
+      <td class="num">${s.ttft ? fmtTime(s.ttft.mean) : '–'}</td>
+      <td class="num">${s.tpot ? fmtTime(s.tpot.mean) : '–'}</td>
       <td class="num">${s.tokens ? fmt(s.tokens.output_throughput, 1) : '–'}</td>
       <td class="act"><button class="mini" data-act="sel" data-id="${r.id}">主视图</button>
         <button class="mini ghost" data-act="detail" data-id="${r.id}">详情</button></td>
@@ -675,12 +741,12 @@ function renderCompareTable() {
     ['Success', (r) => r.summary.success_rate, 'high', pct],
     ['Goodput', (r) => r.summary.goodput, 'high', pct],
     ['RPS', (r) => r.summary.rps, 'high', (v) => fmt(v, 2)],
-    ['E2EL mean', (r) => r.summary.e2e.mean, 'low', (v) => fmt(v) + ' ms'],
-    ['E2EL P95', (r) => r.summary.e2e.p95, 'low', (v) => fmt(v) + ' ms'],
-    ['TTFT mean', (r) => r.summary.ttft.mean, 'low', (v) => fmt(v) + ' ms'],
-    ['TPOT mean', (r) => r.summary.tpot.mean, 'low', (v) => fmt(v, 1) + ' ms'],
+    ['E2EL mean', (r) => r.summary.e2e.mean, 'low', (v) => fmtTime(v)],
+    ['E2EL P95', (r) => r.summary.e2e.p95, 'low', (v) => fmtTime(v)],
+    ['TTFT mean', (r) => r.summary.ttft.mean, 'low', (v) => fmtTime(v)],
+    ['TPOT mean', (r) => r.summary.tpot.mean, 'low', (v) => fmtTime(v)],
     ['Output tok/s', (r) => r.summary.tokens.output_throughput, 'high', (v) => fmt(v, 1)],
-    ['Cache hit', (r) => (r.summary.cache ? r.summary.cache.hit_rate : null), 'high', pct],
+     ['Cache hit', (r) => (r.summary.cache && r.summary.cache.reported !== false ? r.summary.cache.hit_rate : null), 'high', pct],
     ['Errors', (r) => r.summary.failed, 'low', (v) => v],
   ];
   const head = $('cmpTable').querySelector('thead'), body = $('cmpTable').querySelector('tbody');
@@ -699,17 +765,46 @@ function renderCompareTable() {
     return `<td class="${cls}">${f ? f(v) : esc(v ?? '–')}</td>`;
   }).join('') + '</tr>').join('');
 }
+function syncRunControls() {
+  const start = $('btnStart');
+  const pause = $('btnPause');
+  const stop = $('btnStop');
+  const actions = $('side-actions-perf');
+  if (!start || !pause || !stop) return;
+  const run = state.primary ? state.runs.get(state.primary) : null;
+  const status = run?.status || 'idle';
+  const active = status === 'running' || status === 'paused';
+  const batchActive = state.activeIds.length > 0;
+  const stopping = status === 'stopping';
+  const finished = ['done', 'error', 'stopped'].includes(status);
+  start.disabled = active || stopping || batchActive || start.dataset.busy === '1';
+  pause.disabled = !batchActive;
+  stop.disabled = !batchActive || stopping;
+  if (start.dataset.busy !== '1') {
+    start.textContent = stopping ? '正在停止…' : status === 'paused' ? '继续测试' : status === 'running' ? '测试进行中' : finished ? '重新测试' : '开始测试';
+    start.classList.toggle('is-resume', status === 'paused');
+    start.setAttribute('aria-label', start.textContent);
+  }
+  pause.textContent = status === 'paused' ? '继续' : '暂停';
+  stop.textContent = '停止测试';
+  actions?.setAttribute('data-state', status);
+}
+
 function refreshTopbar() {
   const runs = [...state.runs.values()];
   $('runCount').textContent = runs.length;
+  syncRailStats();
   $('reqCount').textContent = runs.reduce((a, r) => a + (r.summary?.total ?? r.samples.length), 0);
   $('errCount').textContent = runs.reduce((a, r) => a + (r.summary?.failed ?? r.samples.filter((s) => !s.ok).length), 0);
   $('rec').hidden = !runs.some((r) => r.status === 'running');
-  // 有数据 → 显示仪表盘，隐藏空态
-  const has = runs.length > 0;
-  $('emptyPerf').hidden = has;
+  const has = state.historyLoaded && runs.length > 0;
+  const loading = !state.historyLoaded;
+  $('emptyPerf').hidden = loading || has;
   $('perfDash').hidden = !has;
   document.body.classList.toggle('has-data', has);
+  syncRunControls();
+  const reportBtn = $('btnVerifyReport');
+  if (reportBtn) reportBtn.disabled = !(state.primary && state.runs.get(state.primary)?.summary);
 }
 
 window.addEventListener('viewchange', () => Object.values(charts).forEach((c) => c && c.resize()));
@@ -769,9 +864,9 @@ function renderRequests() {
     <td class="num">${r.seq}</td>
     <td class="num" ${style(r)}>${r.status_code ?? '–'}</td>
     <td>${r.ok ? '' : `<span class="badge no">${esc(r.error_class || 'error')}</span>`}</td>
-    <td class="num">${r.ttft_ms != null ? fmt(r.ttft_ms) : '–'}</td>
-    <td class="num">${r.e2e_ms != null ? fmt(r.e2e_ms) : '–'}</td>
-    <td class="num">${r.tpot_ms != null ? fmt(r.tpot_ms, 1) : '–'}</td>
+    <td class="num">${r.ttft_ms != null ? fmtTime(r.ttft_ms) : '–'}</td>
+    <td class="num">${r.e2e_ms != null ? fmtTime(r.e2e_ms) : '–'}</td>
+    <td class="num">${r.tpot_ms != null ? fmtTime(r.tpot_ms) : '–'}</td>
     <td class="num">${r.in_tokens}/${r.out_tokens}</td>
     <td class="num">${r.cached_tokens ? fmt(r.cached_tokens) : '–'}</td>
     <td class="got" ${style(r)}>${esc((r.error_msg || '').slice(0, 300))}</td>
@@ -795,13 +890,13 @@ async function openRunDetail(id) {
         ${row('状态', d.status)}
         ${row('请求 / 成功', `${s.total ?? 0} / ${s.ok ?? 0}`)}
         ${row('Success / Goodput', `${pct(s.success_rate)} / ${pct(s.goodput)}${s.request_goodput != null ? `（${fmt(s.request_goodput, 2)} req/s）` : ''}`)}
-        ${row('RPS', fmt(s.rps, 2))}
-        ${row('E2EL mean/P95/P99', s.e2e ? `${fmt(s.e2e.mean)} / ${fmt(s.e2e.p95)} / ${fmt(s.e2e.p99)} ms` : '-')}
-        ${row('TTFT mean/P95', s.ttft ? `${fmt(s.ttft.mean)} / ${fmt(s.ttft.p95)} ms` : '-')}
-        ${row('TPOT / ITL P99', s.tpot ? `${fmt(s.tpot.mean, 1)} / ${fmt(s.itl.p99, 1)} ms` : 'n/a')}
+         ${row('成功 / 尝试 RPS', `${fmt(s.rps, 2)} / ${fmt(s.attempted_rps, 2)} req/s`)}
+        ${row('E2EL mean/P95/P99', s.e2e ? `${fmtTime(s.e2e.mean)} / ${fmtTime(s.e2e.p95)} / ${fmtTime(s.e2e.p99)}` : '-')}
+        ${row('TTFT mean/P95', s.ttft ? `${fmtTime(s.ttft.mean)} / ${fmtTime(s.ttft.p95)}` : '-')}
+        ${row('TPOT / ITL P99', s.tpot ? `${fmtTime(s.tpot.mean)} / ${fmtTime(s.itl.p99)}` : 'n/a')}
         ${row('Output tok/s', s.tokens && s.tokens.output_throughput != null ? `${fmt(s.tokens.output_throughput, 1)} tok/s（墙钟） / ${fmt(s.tokens.output_throughput_per_user, 1)} tok/s（解码）` : 'n/a')}
         ${row('Tokens in/out', s.tokens ? `${s.tokens.in} / ${s.tokens.out}` : '-')}
-        ${row('Cache hit', s.cache ? `${pct(s.cache.hit_rate)}（cached ${s.cache.cached_tokens}${s.cache.ttft_speedup ? `，TTFT ${fmt(s.cache.ttft_hit.mean)} vs ${fmt(s.cache.ttft_miss.mean)} ms` : ''}）` : '-')}
+         ${row('Cache hit', s.cache ? (s.cache.reported === false ? '未上报' : `${pct(s.cache.hit_rate)}（token ${fmt(s.cache.cached_tokens)}/${fmt(s.tokens.in)}，请求命中 ${s.cache.requests_hit}/${s.cache.requests_hit + s.cache.requests_miss}${s.cache.ttft_speedup ? `，TTFT 加速 ${s.cache.ttft_speedup}×` : ''}）`) : '-')}
         ${row('Checks 非空输出', s.ok > 0 && s.checks && s.checks.nonempty_rate != null ? `${pct(s.checks.nonempty_rate)}${s.checks.empty_output ? `（空输出 ${s.checks.empty_output} 条，疑似 200 空补全）` : ''}` : 'n/a')}
         ${row('Cost', s.cost && (s.cost.price_in > 0 || s.cost.price_out > 0) ? '¥' + fmt(s.cost.total, 4) : '未配置单价')}
         ${row('Errors', Object.entries(s.errors || {}).map(([k, v]) => `${k}:${v}`).join(', ') || '无')}
@@ -817,8 +912,9 @@ async function openRunDetail(id) {
 }
 
 /* ---------- SSE ---------- */
-function connectSSE(run) {
-  const es = new EventSource(`/api/runs/${run.id}/stream`);
+function connectSSE(run, resetAck = false, afterId = null) {
+  const query = resetAck ? `?reset=1&after_id=${encodeURIComponent(afterId ?? 0)}` : '';
+  const es = new EventSource(`/api/runs/${run.id}/stream${query}`);
   run.sse = es;
   es.onopen = () => {
     run.sseOpen = true;
@@ -828,8 +924,37 @@ function connectSSE(run) {
   };
   es.onmessage = (ev) => {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
-    if (msg.type === 'sample') {
-      run.samples.push(msg.data);
+    if (msg.id != null) {
+      if (run.lastEventId && msg.id <= run.lastEventId) return;
+      run.lastEventId = msg.id;
+    }
+    if (msg.type === 'reset') {
+      es.close();
+      run.sse = null;
+      run.sseOpen = false;
+       run.samples = [];
+       run.sampleSeqs = new Set();
+       run.lastEventId = 0;
+      const recoverSnapshot = (attempt = 0) => {
+        fetchJSON(`/api/runs/${run.id}/samples?max_points=4000`).then((d) => {
+          run.samples = d.samples || [];
+          run.sampleSeqs = new Set(run.samples.map((s) => s.seq));
+          run.lastEventId = d.event_seq || 0;
+          if (state.primary === run.id) renderSingle(run);
+          connectSSE(run, true, run.lastEventId);
+        }).catch(() => {
+          const delay = Math.min(10000, 500 * (2 ** Math.min(attempt, 4)));
+          setTimeout(() => recoverSnapshot(attempt + 1), delay);
+        });
+      };
+      recoverSnapshot();
+      return;
+    }
+     if (msg.type === 'sample') {
+       if (!run.sampleSeqs) run.sampleSeqs = new Set();
+       if (run.sampleSeqs.has(msg.data.seq)) return;
+       run.sampleSeqs.add(msg.data.seq);
+       run.samples.push(msg.data);
       if (run.samples.length > 4000) run.samples.shift();
       if (!msg.data.ok) log('warn', `[${run.target}] #${msg.data.seq} 失败 ${msg.data.error_class || ''} ${msg.data.status_code || ''}`);
       clearWaiting();
@@ -848,10 +973,12 @@ function connectSSE(run) {
       }
     } else if (msg.type === 'status') {
       run.status = msg.status; renderRuns();
-      if (msg.status === 'done' || msg.status === 'error') {
-        clearWaiting();
-        log(msg.status === 'done' ? 'ok' : 'err', `[${run.target}] 运行结束：${msg.status}`);
-        UI.toast(`${run.target} 运行${msg.status === 'done' ? '完成' : '出错'}`, msg.status === 'done' ? 'ok' : 'err');
+       if (msg.status === 'done' || msg.status === 'error' || msg.status === 'stopped') {
+         state.activeIds = state.activeIds.filter((rid) => rid !== run.id);
+         clearWaiting();
+        const stopped = msg.status === 'stopped';
+        log(msg.status === 'done' ? 'ok' : stopped ? 'warn' : 'err', `[${run.target}] 运行结束：${msg.status}`);
+        UI.toast(`${run.target} 运行${msg.status === 'done' ? '完成' : stopped ? '已停止' : '出错'}`, msg.status === 'done' ? 'ok' : stopped ? 'info' : 'err');
         es.close();
         fetchJSON(`/api/runs/${run.id}`).then((d) => { run.summary = d.summary; if (state.primary === run.id) renderCards(d.summary); renderRuns(); renderCompareTable(); renderSingle(run); notify(run); });
       }
@@ -861,15 +988,22 @@ function connectSSE(run) {
     }
   };
   es.onerror = () => {
-    if (run.status === 'done' || run.status === 'error') { es.close(); return; }
+    if (run.status === 'done' || run.status === 'error' || run.status === 'stopped') { es.close(); return; }
     run.sseOpen = false;
     if (state.primary === run.id) $('vbTicksCap').textContent = '连接中断，重连中…';
   };
 }
 
 /* ---------- 渲染循环 ---------- */
-function renderAll() {
+function renderAll(force = false) {
+  if (location.hash === '#bench') return;
   const run = state.primary ? state.runs.get(state.primary) : null;
+  const runs = [...state.runs.values()];
+  const sampleCount = runs.reduce((n, r) => n + r.samples.length, 0);
+  const statusKey = runs.map((r) => r.status).join(',');
+  const signature = `${state.primary || ''}|${state.range}|${runs.length}|${sampleCount}|${statusKey}`;
+  if (!force && signature === renderSignature) return;
+  renderSignature = signature;
   if (run) renderSingle(run);
   renderCompareChart();
 }
@@ -938,6 +1072,9 @@ async function doParse() {
   finally { UI.setBusy(btn, false); }
 }
 async function doStart() {
+  const current = state.primary ? state.runs.get(state.primary) : null;
+  if (current?.status === 'paused') { await control('resume'); return; }
+  if (state.activeIds.length) { UI.toast('已有测试仍在运行，请先停止当前批次', 'warn'); return; }
   if (!state.targets.length) { await doParse(); if (!state.targets.length) { UI.toast('请先粘贴配置并点「识别配置」', 'warn'); return; } }
   const ready = state.targets.filter((t) => t.base_url);
   if (!ready.length) { UI.toast('还没有可用地址，请补上 base_url 后再测', 'warn'); setSidebar(true); return; }
@@ -951,9 +1088,12 @@ async function doStart() {
     log('ok', `启动 ${d.count} 个运行 · mode=${cfg.mode}`);
     UI.toast(`已启动 ${d.count} 个运行`, 'ok');
     d.run_ids.forEach((rid, i) => {
-      const t = state.targets[i];
-      const run = { id: rid, target: t.name, model: t.model, provider: t.provider, status: 'running', samples: [], summary: null, slo: cfg.slo, mode: cfg.mode, requestCount: cfg.mode === 'open' ? null : cfg.request_count, randomize: cfg.randomize, promptMode: cfg.traffic && cfg.traffic.prompt_mode, color: C.series[state.colorIdx++ % C.series.length], sse: null, sseOpen: false };
-      state.runs.set(rid, run); state.primary = rid; connectSSE(run);
+      const t = ready[i];
+      const run = { id: rid, target: t.name, model: t.model, provider: t.provider, status: 'running', samples: [], sampleSeqs: new Set(), summary: null, slo: cfg.slo, mode: cfg.mode, requestCount: cfg.mode === 'open' ? null : cfg.request_count, randomize: cfg.randomize, cacheMode: cfg.cache_mode, promptMode: cfg.traffic && cfg.traffic.prompt_mode, color: C.series[state.colorIdx++ % C.series.length], sse: null, sseOpen: false, lastEventId: 0 };
+       state.runs.set(rid, run);
+       state.activeIds.push(rid);
+       if (i === 0) state.primary = rid;
+       connectSSE(run);
     });
     renderRuns(); renderCompareTable(); refreshTopbar();
     const first = state.runs.get(state.primary);
@@ -967,11 +1107,17 @@ async function doStart() {
   finally { UI.setBusy(btn, false); }
 }
 async function control(act) {
-  if (!state.primary) { UI.toast('请先选择一个运行', 'warn'); return; }
+  const ids = state.activeIds.length ? [...state.activeIds] : state.primary ? [state.primary] : [];
+  if (!ids.length) { UI.toast('请先选择一个运行', 'warn'); return; }
   try {
-    await fetchJSON(`/api/runs/${state.primary}/${act}`, { method: 'POST' });
-    log('info', `已发送 ${act}`);
-    UI.toast(act === 'stop' ? '已发送停止' : act === 'pause' ? '已发送暂停' : '已发送继续', 'info', 2000);
+    await Promise.all(ids.map((rid) => fetchJSON(`/api/runs/${rid}/${act}`, { method: 'POST' })));
+    ids.forEach((rid) => {
+      const run = state.runs.get(rid);
+      if (run) run.status = act === 'pause' ? 'paused' : act === 'resume' ? 'running' : act === 'stop' ? 'stopping' : run.status;
+    });
+    log('info', `已发送 ${act} · ${ids.length} 个运行`);
+    UI.toast(act === 'stop' ? `已发送停止 · ${ids.length} 个运行` : act === 'pause' ? `已发送暂停 · ${ids.length} 个运行` : `已发送继续 · ${ids.length} 个运行`, 'info', 2000);
+    renderRuns();
   } catch (e) { log('err', e.message); UI.toast('操作失败: ' + e.message, 'err'); }
 }
 function buildConfig() {
@@ -979,12 +1125,24 @@ function buildConfig() {
   return {
     name: `bench-${nowTime()}`, targets: state.targets.filter((t) => t.base_url),
     mode: $('mode').value, concurrency: n('concurrency'), request_count: n('request_count'),
-    rate: n('rate'), duration_s: n('duration_s'), warmup: n('warmup'), timeout_s: n('timeout_s'),
-    retries: n('retries'), stream: $('stream').checked, connection_reuse: $('connection_reuse').checked,
-    randomize: $('randomize').checked, jitter: n('jitter'), proxy: $('proxy').value.trim() || null,
-    price_in: n('price_in'), price_out: n('price_out'), price_cache_in: n('price_cache_in'),
-    slo: { ttft_ms: n('slo_ttft'), tpot_ms: n('slo_tpot'), e2e_ms: n('slo_e2e') },
-    traffic: { prompt_mode: $('prompt_mode').value, prompt: $('prompt').value, input_tokens: n('input_tokens'), max_tokens: n('max_tokens'), temperature: n('temperature') },
+     rate: n('rate'), duration_s: n('duration_s'), warmup: $('cache_mode').checked ? Math.max(1, n('warmup')) : n('warmup'), timeout_s: n('timeout_s'),
+     retries: n('retries'), stream: $('stream').checked, connection_reuse: $('connection_reuse').checked,
+     verify_tls: $('verify_tls').checked, cache_mode: $('cache_mode').checked,
+     randomize: !$('cache_mode').checked && $('randomize').checked, jitter: n('jitter'),
+     proxy: $('proxy').value.trim() || null, ramp_rate: n('ramp_rate'),
+     ramp_s: n('ramp_s'), cooldown_s: n('cooldown_s'),
+     price_in: n('price_in'), price_out: n('price_out'), price_cache_in: n('price_cache_in'), price_cache_write: n('price_cache_write'),
+     slo: { ttft_ms: n('slo_ttft'), tpot_ms: n('slo_tpot'), e2e_ms: n('slo_e2e') },
+     traffic: {
+       prompt_mode: $('prompt_mode').value,
+       prompt: $('prompt').value,
+       system_prompt: $('system_prompt').value,
+       input_dist: $('input_dist').value,
+       input_tokens: n('input_tokens'),
+       top_p: $('top_p').value === '' ? null : n('top_p'),
+       max_tokens: n('max_tokens'),
+       temperature: n('temperature'),
+     },
   };
 }
 
@@ -1007,8 +1165,8 @@ async function doProbe() {
     const rows = d.results.map((r) => `<tr>
       <td>${esc(r.name)}</td><td>${r.provider}</td><td class="mono">${esc(r.model)}</td>
       <td><span class="badge ${r.ok ? 'ok' : 'no'}">${r.ok ? 'OK' : (r.error_class || 'FAIL')}</span></td>
-      <td class="num">${r.status_code || '–'}</td><td class="num">${fmt(r.ttft_ms)} ms</td><td class="num">${fmt(r.e2e_ms)} ms</td>
-      <td class="num">${fmt(r.tpot_ms, 1)} ms</td>
+      <td class="num">${r.status_code || '–'}</td><td class="num">${fmtTime(r.ttft_ms)}</td><td class="num">${fmtTime(r.e2e_ms)}</td>
+      <td class="num">${fmtTime(r.tpot_ms)}</td>
       <td class="num">${fmt(r.dns_ms, 1)}/${fmt(r.tcp_ms, 1)}/${fmt(r.tls_ms, 1)}</td>
       <td class="num">${r.in_tokens}/${r.out_tokens}</td>
       <td class="trunc" title="${esc(r.error_msg || '')}" style="color:var(--bad)">${esc(r.error_msg || '')}</td></tr>`).join('');
@@ -1025,12 +1183,116 @@ async function doModels() {
     try {
       const d = await fetchJSON('/api/targets/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targets: [t] }) });
       const models = (d.models && d.models[t.name]) || [];
-      out.push(`<h4 style="color:var(--tx-1);font-size:12px;font-weight:600;margin:10px 0 4px">${esc(t.name)} · ${models.length} 个模型</h4>
-        <div class="mono" style="font-size:11px;color:var(--tx-2);max-height:220px;overflow:auto;border:1px solid var(--line-2);border-radius:8px;padding:8px">${models.map(esc).join('<br>') || '<span class="hint">无（可能不支持 /v1/models）</span>'}</div>`);
+      const q = (t.model || '').trim();
+      const emptyHint = !t.api_key
+        ? '无模型（网络/上游异常；可不填 key 重试，OpenRouter 列表无需鉴权）'
+        : '无（可能不支持 /v1/models，或密钥无权限）';
+      const hits = q ? models.filter((m) => m.toLowerCase().includes(q.toLowerCase())) : [];
+      const hitLine = q
+        ? (hits.length
+            ? ` · 当前 <code>${esc(q)}</code> 命中 ${hits.length}${hits.length === 1 && hits[0].toLowerCase() === q.toLowerCase() ? ' ✓' : ''}`
+            : ` · 当前 <code>${esc(q)}</code> 不在列表（仍可直接请求，列表可能滞后）`)
+        : '';
+      out.push(`<div class="ml-ch" data-ch="${esc(t.name)}" data-key="${t.api_key ? '1' : '0'}">
+        <h4 style="color:var(--tx-1);font-size:12px;font-weight:600;margin:10px 0 4px">${esc(t.name)} · ${models.length} 个模型${hitLine}</h4>
+        <input type="search" class="ml-filter" placeholder="过滤模型 id…（如 bunny / stealth）" data-mlf="${esc(t.name)}" spellcheck="false" />
+        <div class="mono ml-list" data-mll="${esc(t.name)}">${models.map((m) => `<div class="ml-item${q && m.toLowerCase() === q.toLowerCase() ? ' hit' : ''}" data-mid="${esc(m)}">${esc(m)}</div>`).join('') || `<span class="hint">${emptyHint}</span>`}</div>
+      </div>`);
     } catch (e) { out.push(`<div class="hint">${esc(t.name)}: ${esc(e.message)}</div>`); }
   }
   UI.openModal('模型列表', out.join(''));
+  document.querySelectorAll('.ml-filter').forEach((inp) => {
+    const box0 = document.querySelector(`.ml-list[data-mll="${CSS.escape(inp.dataset.mlf)}"]`);
+    const hit = box0 && box0.querySelector('.ml-item.hit');
+    if (hit) hit.scrollIntoView({ block: 'center' });
+    inp.addEventListener('input', () => {
+      const q = inp.value.trim().toLowerCase();
+      const box = document.querySelector(`.ml-list[data-mll="${CSS.escape(inp.dataset.mlf)}"]`);
+      if (!box) return;
+      box.querySelectorAll('.ml-item').forEach((el) => {
+        el.hidden = q ? !el.dataset.mid.toLowerCase().includes(q) : false;
+      });
+    });
+  });
 }
+
+/* ---------- 渠道验真报告 ---------- */
+function buildVerifyReport(run, cache, bench) {
+  const s = run.summary || {};
+  const cacheSummary = cache && cache.summary ? cache.summary : null;
+  const benchSummary = bench && bench.summary ? bench.summary : null;
+  const perfPassed = s.slo && s.slo.total ? s.slo.passed === s.slo.total : null;
+  const perfText = perfPassed == null ? '样本不足，暂不判定' : perfPassed ? '性能 SLO 全部达标' : `性能 SLO 达标 ${s.slo.passed}/${s.slo.total}`;
+  const cacheText = !cacheSummary ? '未执行缓存检测' : cacheSummary.verdict === 'valid' ? '缓存有效' : cacheSummary.verdict === 'suspect' ? '疑似假缓存' : cacheSummary.verdict === 'unreported' ? '未上报缓存字段' : '缓存检测失败';
+  const benchText = !benchSummary ? '未执行降智检测' : benchSummary.verdict === 'normal' || benchSummary.verdict === 'baseline' ? '降智检测正常' : benchSummary.verdict === 'suspect' ? '发现疑似降智' : benchSummary.verdict === 'improved' ? '高于基线' : benchSummary.verdict;
+  const lines = [
+    '# LLM Bench 渠道验真报告',
+    '',
+    `- 生成时间：${new Date().toLocaleString('zh-CN')}`,
+    `- Run ID：${run.id}`,
+    `- 渠道：${run.target || '-'}`,
+    `- 模型：${run.model || '-'}`,
+    `- 协议：${run.provider || '-'}`,
+    '',
+    '## 1. 性能',
+    `- 样本：${s.total || 0}，成功 ${s.ok || 0}，失败 ${s.failed || 0}`,
+    `- 成功率：${pct(s.success_rate)}；Goodput：${pct(s.goodput)}`,
+    `- TTFT P95：${fmtTime(s.ttft && s.ttft.p95)}；E2EL P95：${fmtTime(s.e2e && s.e2e.p95)}`,
+    `- TPOT：${s.tpot && s.tpot.mean != null ? fmtTime(s.tpot.mean) : 'n/a'}；成功/尝试 RPS：${fmt(s.rps, 2)} / ${fmt(s.attempted_rps, 2)}`,
+    `- 判定：${perfText}`,
+    '',
+    '## 2. Prompt Cache',
+    cacheSummary
+      ? `- 判定：${cacheText}；命中轮 ${cacheSummary.hit_requests || 0}/${cacheSummary.ok_rounds || 0}；加速 ${fmt(cacheSummary.speedup_min ?? cacheSummary.speedup, 2)}×`
+      : '- 判定：未执行缓存检测',
+    '',
+    '## 3. 降智检测',
+    benchSummary
+      ? `- 判定：${benchText}；完成 ${benchSummary.completed || 0}/${benchSummary.n_items || 0}；总分 ${benchSummary.total != null ? pct(benchSummary.total) : 'n/a'}`
+      : '- 判定：未执行降智检测',
+    '',
+    '## 4. 综合结论',
+    `- ${perfText}；${cacheText}；${benchText}。`,
+    '- 复算依据：原始样本、SLO 参数、价格参数与检测轮次均保留在本机历史记录中。',
+  ];
+  return lines.join('\n');
+}
+async function openVerifyReport() {
+  const run = state.primary ? state.runs.get(state.primary) : null;
+  if (!run || !run.summary) { UI.toast('先完成一次性能测试，再生成验真报告', 'warn'); return; }
+  const [cacheData, benchData] = await Promise.all([
+    fetchJSON('/api/cache/checks?limit=20').catch(() => ({ checks: [] })),
+    fetchJSON('/api/bench/runs').catch(() => ({ runs: [] })),
+  ]);
+  const cache = (cacheData.checks || []).find((c) => c.model === run.model) || null;
+  const bench = (benchData.runs || []).find((b) => b.model === run.model) || null;
+  state.reportMarkdown = buildVerifyReport(run, cache, bench);
+  UI.openModal('渠道验真报告', `<pre class="report-markdown">${esc(state.reportMarkdown)}</pre><div class="btnrow" style="margin-top:12px"><button class="primary mini" data-report-copy>复制 Markdown</button><button class="ghost mini" data-report-download>下载报告</button></div>`);
+}
+function downloadVerifyReport() {
+  if (!state.reportMarkdown) return;
+  const blob = new Blob([state.reportMarkdown], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `llm-bench-verify-${state.primary || 'report'}.md`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+document.addEventListener('click', async (e) => {
+  const presetLoad = e.target.closest('button[data-preset-load]');
+  const presetDelete = e.target.closest('button[data-preset-delete]');
+  if (presetLoad) { loadPreset(presetLoad.dataset.presetLoad); return; }
+  if (presetDelete) { deletePreset(presetDelete.dataset.presetDelete); return; }
+  if (e.target.closest('#btnVerifyReport')) { await openVerifyReport(); return; }
+  if (e.target.closest('[data-report-copy]')) {
+    try { await navigator.clipboard.writeText(state.reportMarkdown); UI.toast('报告已复制', 'ok'); }
+    catch (err) { UI.toast('复制失败: ' + err.message, 'err'); }
+    return;
+  }
+  if (e.target.closest('[data-report-download]')) { downloadVerifyReport(); }
+});
 
 /* ---------- 缓存检测（主动验证 Prompt Cache） ---------- */
 const CACHE_VERDICTS = {
@@ -1045,13 +1307,16 @@ function cacheVerdictBadge(v) {
 }
 function cacheResultHtml(r) {
   const s = r.summary || {};
-  const delta = (r.baseline && s.speedup != null && r.baseline.speedup)
-    ? s.speedup - r.baseline.speedup : null;
+  const speedupMin = s.speedup_min ?? s.speedup;
+  const missTtft = s.ttft_miss_min ?? s.ttft_miss_med ?? s.ttft_miss_mean;
+  const hitTtft = s.ttft_hit_min ?? s.ttft_hit_med ?? s.ttft_hit_mean;
+  const delta = (r.baseline && speedupMin != null && r.baseline.speedup != null)
+    ? speedupMin - r.baseline.speedup : null;
   const deltaTxt = delta == null ? '' : `<span style="color:${delta >= 0 ? 'var(--ok)' : 'var(--bad)'}">${delta >= 0 ? '+' : ''}${delta.toFixed(2)}×</span>`;
   const kv = `<div class="kv">
     ${r.baseline ? `<div class="k">基线加速比</div><div class="v">${fmt(r.baseline.speedup, 2)}×　${deltaTxt}（相对本次）</div>` : ''}
-    <div class="k">TTFT miss → hit</div><div class="v">${fmt(s.ttft_miss_med)} ms → ${fmt(s.ttft_hit_med)} ms（中位）</div>
-    <div class="k">加速比</div><div class="v"><b>${fmt(s.speedup_min, 2)}×</b>（min 口径，判定用）· 中位 ${fmt(s.speedup, 2)}× · 阈值 ${fmt(s.speedup_threshold, 1)}×</div>
+     <div class="k">TTFT miss → hit</div><div class="v">${fmtTime(missTtft)} → ${fmtTime(hitTtft)}（min / 旧记录回退中位）</div>
+     <div class="k">加速比</div><div class="v"><b>${fmt(speedupMin, 2)}×</b>（min 口径，判定用）· 中位 ${fmt(s.speedup, 2)}× · 阈值 ${fmt(s.speedup_threshold, 1)}×</div>
     <div class="k">命中请求</div><div class="v">${fmt(s.hit_requests)} / ${fmt(s.ok_rounds)} 成功轮</div>
     <div class="k">上报 cached</div><div class="v">${s.provider_reported ? '是' : '否（未返回缓存字段）'}</div>
   </div>
@@ -1059,8 +1324,8 @@ function cacheResultHtml(r) {
   const rows = (r.rounds || []).map((it, i) => `<tr>
     <td class="num">${it.seq}</td>
     <td><span class="badge ${it.ok ? 'ok' : 'no'}">${it.ok ? (i === 0 ? '写入' : (it.cached_tokens > 0 ? '命中' : '未命中')) : (it.error_class || 'FAIL')}</span></td>
-    <td class="num">${fmt(it.ttft_ms)} ms</td>
-    <td class="num">${fmt(it.e2e_ms)} ms</td>
+    <td class="num">${fmtTime(it.ttft_ms)}</td>
+    <td class="num">${fmtTime(it.e2e_ms)}</td>
     <td class="num">${fmt(it.cached_tokens)}</td>
     <td class="num">${fmt(it.cache_write_tokens)}</td>
     <td class="num">${fmt(it.in_tokens)}</td>
@@ -1072,17 +1337,17 @@ function cacheResultHtml(r) {
   return `<div style="margin:0 0 6px">${cacheVerdictBadge(s.verdict)} <b>${esc(r.name)}</b> <span class="mono" style="color:var(--tx-2)">${esc(r.model)}</span></div>
     ${kv}${table}`;
 }
-async function renderCacheHist() {
+async function renderCacheHist(offset = 0, append = false) {
   const box = $('cacheHist');
   if (!box) return;
   try {
-    const d = await fetchJSON('/api/cache/checks');
+    const d = await fetchJSON(`/api/cache/checks?limit=20&offset=${offset}`);
     const rows = (d.checks || []).map((c) => {
       const s = c.summary || {};
       return `<tr>
         <td class="mono">${dtstr(c.ts)}</td>
         <td>${esc(c.name)}</td><td class="mono">${esc(c.model)}</td>
-        <td class="num">${fmt(s.speedup, 2)}×</td>
+         <td class="num">${fmt(s.speedup_min ?? s.speedup, 2)}×</td>
         <td>${cacheVerdictBadge(s.verdict)}${c.is_baseline ? ' <span class="mono" style="color:var(--acc-hi);font-size:10.5px">基线</span>' : ''}</td>
         <td class="act">
           <button class="mini ghost" data-cact="view" data-cid="${c.id}">查看</button>
@@ -1090,10 +1355,19 @@ async function renderCacheHist() {
           <button class="mini ghost" data-cact="del" data-cid="${c.id}">删</button>
         </td></tr>`;
     }).join('');
+    if (append) {
+      const tbody = box.querySelector('tbody');
+      if (tbody) tbody.insertAdjacentHTML('beforeend', rows);
+      const more = box.querySelector('[data-cache-more]');
+      if (d.has_more && more) more.dataset.offset = d.next_offset;
+      else if (more) more.remove();
+      return;
+    }
     box.innerHTML = `<h4 style="color:var(--tx-1);font-size:12px;font-weight:600;margin:14px 0 6px">检测历史</h4>
       <div class="table-scroll"><table class="grid"><thead><tr>
-        <th>时间</th><th>Channel</th><th>Model</th><th class="num">加速比</th><th>判定</th><th class="act">Actions</th>
-        </tr></thead><tbody>${rows || '<tr><td colspan="6" class="hint">还没有检测记录。点「缓存检测」跑一次，就能看到这条渠道的缓存是否真实生效。</td></tr>'}</tbody></table></div>`;
+        <th>时间</th><th>渠道</th><th>模型</th><th class="num">加速比</th><th>判定</th><th class="act">操作</th>
+        </tr></thead><tbody>${rows || '<tr><td colspan="6" class="hint">还没有检测记录。点「缓存检测」跑一次，就能看到这条渠道的缓存是否真实生效。</td></tr>'}</tbody></table></div>
+      ${d.has_more ? `<button class="mini ghost" data-cache-more data-offset="${d.next_offset}">加载更多历史</button>` : ''}`;
   } catch { box.innerHTML = '<div class="hint">历史加载失败，请稍后重试</div>'; }
 }
 async function showCacheDetail(cid) {
@@ -1111,29 +1385,49 @@ async function doCacheCheck() {
     rounds: Number($('c_rounds').value) || 6,
     prefix_tokens: Number($('c_prefix').value) || 2048,
     speedup_threshold: Number($('c_speedup').value) || 1.5,
-    max_tokens: Math.max(Number($('max_tokens').value) || 1024, 1024),  // 思考型模型先耗预算，太小会整轮空输出
+    max_tokens: Math.max(Number($('max_tokens').value) || 1024, 1024),
     stream: $('stream').checked,
     timeout_s: Number($('timeout_s').value) || 60,
     proxy: $('proxy').value.trim() || null,
-    verify_tls: true,
+    verify_tls: $('verify_tls').checked,
+    background: true,
   };
   const t0 = Date.now();
-  UI.openModal('缓存检测', `<div class="hint" data-busy="1">正在检测 ${state.targets.length} 个渠道…（串行 ${body.rounds} 轮/渠道，约需数十秒）</div>`);
-  const timer = setInterval(() => {
-    const el = $('modalBody');
-    if (el && el.dataset.busy === '1') el.innerHTML = `<div class="hint">正在检测… 已用 ${((Date.now() - t0) / 1000).toFixed(1)} 秒（串行 ${body.rounds} 轮/渠道，勿关闭）</div>`;
-  }, 300);
+  UI.openModal('缓存检测', `<div class="hint" data-busy="1">正在提交 ${state.targets.length} 个渠道…</div>`);
   try {
-    const d = await fetchJSON('/api/cache/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    clearInterval(timer);
-    UI.openModal('缓存检测', d.results.map(cacheResultHtml).join('<div style="height:14px"></div>') + '<div id="cacheHist"></div>');
-    renderCacheHist();
-    const okN = d.results.filter((r) => (r.summary || {}).verdict === 'valid').length;
-    UI.toast(`缓存检测完成：${okN}/${d.results.length} 渠道缓存有效`, okN ? 'ok' : 'warn');
+    const started = await fetchJSON('/api/cache/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const jobId = started.job_id;
+    if (!jobId) throw new Error('服务未返回缓存检测任务');
+    UI.openModal('缓存检测', `<div class="hint" data-cache-job="${jobId}">正在检测 ${state.targets.length} 个渠道…（串行 ${body.rounds} 轮/渠道）</div><div style="margin-top:12px"><button class="ghost" data-cache-cancel="${jobId}">取消检测</button></div>`);
+    const poll = async () => {
+      try {
+        const job = await fetchJSON(`/api/cache/check/${jobId}`);
+        const el = $('modalBody');
+        if (job.status === 'running' || job.status === 'cancelling') {
+          if (el) el.innerHTML = `<div class="hint" data-cache-job="${jobId}">${job.status === 'cancelling' ? '正在取消…' : `正在检测… 已用 ${((Date.now() - t0) / 1000).toFixed(1)} 秒（串行 ${body.rounds} 轮/渠道）`}</div>${job.status === 'cancelling' ? '' : `<div style="margin-top:12px"><button class="ghost" data-cache-cancel="${jobId}">取消检测</button></div>`}`;
+          setTimeout(poll, 800);
+          return;
+        }
+        if (job.status === 'cancelled') {
+          UI.openModal('缓存检测', '<div class="hint">检测已取消，未完成的轮次不会写入历史。</div>');
+          UI.toast('缓存检测已取消', 'info');
+          return;
+        }
+        if (job.status === 'error') throw new Error(job.error || '检测任务失败');
+        const results = job.results || [];
+        UI.openModal('缓存检测', results.map(cacheResultHtml).join('<div style="height:14px"></div>') + '<div id="cacheHist"></div>');
+        renderCacheHist();
+        const okN = results.filter((r) => (r.summary || {}).verdict === 'valid').length;
+        UI.toast(`缓存检测完成：${okN}/${results.length} 渠道缓存有效`, okN ? 'ok' : 'warn');
+      } catch (e) {
+        UI.openModal('缓存检测', `<div class="hint">检测失败：${esc(e.message)}。请确认渠道地址可达，或把「超时」调大后重试。</div>`);
+        UI.toast('缓存检测失败', 'err');
+      }
+    };
+    poll();
   } catch (e) {
-    clearInterval(timer);
-    UI.openModal('缓存检测', `<div class="hint">检测失败：${esc(e.message)}。请确认渠道地址可达，或把「超时」调大后重试。</div>`);
-    UI.toast('缓存检测失败', 'err');
+    UI.openModal('缓存检测', `<div class="hint">检测提交失败：${esc(e.message)}</div>`);
+    UI.toast('缓存检测提交失败', 'err');
   }
 }
 document.addEventListener('click', async (e) => {
@@ -1149,6 +1443,27 @@ document.addEventListener('click', async (e) => {
       try { await fetchJSON(`/api/cache/checks/${cid}`, { method: 'DELETE' }); UI.toast('已删除', 'ok'); renderCacheHist(); }
       catch (err) { UI.toast('删除失败: ' + err.message, 'err'); }
     }
+  }
+});
+
+document.addEventListener('click', async (e) => {
+  const more = e.target.closest('button[data-cache-more]');
+  if (!more) return;
+  more.disabled = true;
+  await renderCacheHist(Number(more.dataset.offset) || 0, true);
+  more.disabled = false;
+});
+
+document.addEventListener('click', async (e) => {
+  const cancel = e.target.closest('button[data-cache-cancel]');
+  if (!cancel) return;
+  cancel.disabled = true;
+  try {
+    await fetchJSON(`/api/cache/check/${cancel.dataset.cacheCancel}/cancel`, { method: 'POST' });
+    UI.toast('已发送取消请求', 'info');
+  } catch (err) {
+    cancel.disabled = false;
+    UI.toast('取消失败: ' + err.message, 'err');
   }
 });
 
@@ -1172,19 +1487,62 @@ async function createSchedule() {
 function notify(run) {
   const s = run.summary;
   if (!('Notification' in window) || Notification.permission !== 'granted' || !s) return;
-  new Notification(`LLM Bench · ${run.target} 完成`, { body: `成功率 ${pct(s.success_rate)} · E2E P95 ${fmt(s.e2e.p95)}ms · TTFT ${fmt(s.ttft.mean)}ms` });
+  new Notification(`LLM Bench · ${run.target} 完成`, { body: `成功率 ${pct(s.success_rate)} · E2E P95 ${fmtTime(s.e2e.p95)} · TTFT ${fmtTime(s.ttft.mean)}` });
 }
-const PERSIST = ['mode', 'concurrency', 'request_count', 'rate', 'duration_s', 'warmup', 'timeout_s', 'retries', 'jitter', 'proxy', 'prompt_mode', 'input_tokens', 'max_tokens', 'temperature', 'slo_ttft', 'slo_tpot', 'slo_e2e', 'price_in', 'price_out', 'price_cache_in', 'sch_name', 'sch_cron', 'alert_url', 'c_rounds', 'c_prefix', 'c_speedup'];
-function saveCfg() { const o = {}; PERSIST.forEach((id) => { const el = $(id); if (el) o[id] = el.value; }); ['stream', 'connection_reuse', 'randomize'].forEach((id) => o[id] = $(id).checked); localStorage.setItem('llmbench.cfg', JSON.stringify(o)); }
+const PERSIST = ['mode', 'concurrency', 'request_count', 'rate', 'duration_s', 'ramp_s', 'cooldown_s', 'ramp_rate', 'warmup', 'timeout_s', 'retries', 'jitter', 'proxy', 'prompt_mode', 'input_dist', 'input_tokens', 'system_prompt', 'top_p', 'max_tokens', 'temperature', 'slo_ttft', 'slo_tpot', 'slo_e2e', 'price_in', 'price_out', 'price_cache_in', 'price_cache_write', 'sch_name', 'sch_cron', 'alert_url', 'c_rounds', 'c_prefix', 'c_speedup', 'c_preset', 'cache_mode'];
+function saveCfg() { const o = {}; PERSIST.forEach((id) => { const el = $(id); if (el) o[id] = el.value; }); ['stream', 'connection_reuse', 'verify_tls', 'randomize', 'cache_mode'].forEach((id) => o[id] = $(id).checked); localStorage.setItem('llmbench.cfg', JSON.stringify(o)); }
 function loadCfg() {
   try { const o = JSON.parse(localStorage.getItem('llmbench.cfg') || '{}'); Object.entries(o).forEach(([k, v]) => { const el = $(k); if (!el) return; if (el.type === 'checkbox') el.checked = v; else el.value = v; }); } catch { /* ignore */ }
+}
+const PRESET_KEY = 'llmbench.presets';
+function snapshotCfg() {
+  const values = {};
+  PERSIST.forEach((id) => { const el = $(id); if (el) values[id] = el.type === 'checkbox' ? el.checked : el.value; });
+  return values;
+}
+function readPresets() {
+  try { const data = JSON.parse(localStorage.getItem(PRESET_KEY) || '[]'); return Array.isArray(data) ? data : []; } catch { return []; }
+}
+function renderPresets() {
+  const box = $('presetList');
+  if (!box) return;
+  box.innerHTML = readPresets().map((p) => `<span class="preset-chip"><button class="mini ghost" data-preset-load="${esc(p.name)}">${esc(p.name)}</button><button class="mini ghost" data-preset-delete="${esc(p.name)}" aria-label="删除 ${esc(p.name)}">×</button></span>`).join('');
+}
+function savePreset() {
+  const name = ($('preset_name')?.value || '').trim();
+  if (!name) { UI.toast('先给测试方案起个名字', 'warn'); return; }
+  const presets = readPresets().filter((p) => p.name !== name);
+  presets.unshift({ name, values: snapshotCfg(), saved_at: Date.now() });
+  localStorage.setItem(PRESET_KEY, JSON.stringify(presets.slice(0, 8)));
+  $('preset_name').value = '';
+  renderPresets();
+  UI.toast(`已保存「${name}」`, 'ok');
+}
+function loadPreset(name) {
+  const preset = readPresets().find((p) => p.name === name);
+  if (!preset) { UI.toast('测试方案不存在', 'warn'); return; }
+  Object.entries(preset.values || {}).forEach(([id, value]) => {
+    const el = $(id);
+    if (!el) return;
+    if (el.type === 'checkbox') el.checked = !!value;
+    else el.value = value;
+  });
+  saveCfg();
+  renderPresets();
+  UI.toast(`已载入「${name}」`, 'ok');
+}
+function deletePreset(name) {
+  localStorage.setItem(PRESET_KEY, JSON.stringify(readPresets().filter((p) => p.name !== name)));
+  renderPresets();
 }
 async function loadHistory() {
   try {
     const d = await fetchJSON('/api/runs');
     const recent = d.runs.slice(0, 8).reverse();
+    const activeRows = d.runs.filter((r) => ['running', 'pending', 'stopping', 'paused'].includes(r.status));
+    const loadedRows = [...new Map([...recent, ...activeRows].map((r) => [r.run_id, r])).values()];
     const newest = d.runs[0] && d.runs[0].run_id;
-    const loaded = await Promise.all(recent.map(async (r) => {
+    const loaded = await Promise.all(loadedRows.map(async (r) => {
       if (state.runs.has(r.run_id)) return null;
       try {
         const [det, smp] = await Promise.all([fetchJSON(`/api/runs/${r.run_id}`), fetchJSON(`/api/runs/${r.run_id}/samples?max_points=4000`)]);
@@ -1195,7 +1553,7 @@ async function loadHistory() {
       if (!item) continue;
       const { r, det, smp } = item;
       const t = det.run && det.run.params_json ? JSON.parse(det.run.params_json).targets[0] : { name: r.run_id, model: r.model };
-      const run = { id: r.run_id, target: t.name, model: r.model, provider: r.provider, status: det.status, samples: smp.samples || [], summary: det.summary, slo: det.run ? JSON.parse(det.run.slo_json || '{}') : {}, mode: det.run && det.run.params_json ? (JSON.parse(det.run.params_json).mode || 'closed') : 'closed', randomize: det.run && det.run.params_json ? !!JSON.parse(det.run.params_json).randomize : undefined, promptMode: det.run && det.run.params_json ? (JSON.parse(det.run.params_json).traffic || {}).prompt_mode : undefined, color: C.series[state.colorIdx++ % C.series.length], sse: null, sseOpen: false };
+      const run = { id: r.run_id, target: t.name, model: r.model, provider: r.provider, status: det.status, samples: smp.samples || [], sampleSeqs: new Set((smp.samples || []).map((s) => s.seq)), summary: det.summary, slo: det.run ? JSON.parse(det.run.slo_json || '{}') : {}, mode: det.run && det.run.params_json ? (JSON.parse(det.run.params_json).mode || 'closed') : 'closed', randomize: det.run && det.run.params_json ? !!JSON.parse(det.run.params_json).randomize : undefined, cacheMode: det.run && det.run.params_json ? !!JSON.parse(det.run.params_json).cache_mode : false, promptMode: det.run && det.run.params_json ? (JSON.parse(det.run.params_json).traffic || {}).prompt_mode : undefined, color: C.series[state.colorIdx++ % C.series.length], sse: null, sseOpen: false, lastEventId: 0 };
       state.runs.set(r.run_id, run);
     }
     // 默认主视图：在**已加载的这 8 条**里挑"样本充足"的最近一条
@@ -1212,9 +1570,19 @@ async function loadHistory() {
       state.primary = [...state.runs.keys()].pop();
       renderCards(state.runs.get(state.primary).summary);
     }
+    state.activeIds = d.runs.filter((r) => ['running', 'pending', 'stopping', 'paused'].includes(r.status)).map((r) => r.run_id);
+    state.activeIds.forEach((rid) => {
+      const run = state.runs.get(rid);
+      if (run && !run.sse) connectSSE(run);
+    });
     renderRuns(); renderCompareTable(); renderAll(); refreshTopbar();
     if (recent.length) log('info', `已恢复 ${recent.length} 条历史运行`);
-  } catch (e) { log('warn', '历史加载失败: ' + (e && e.message)); }
+  } catch (e) {
+    log('warn', '历史加载失败: ' + (e && e.message));
+  } finally {
+    state.historyLoaded = true;
+    refreshTopbar();
+  }
 }
 
 /* ---------- 指标口径说明 ---------- */
@@ -1223,10 +1591,10 @@ const GLOSSARY = [
   ['TPOT', 'Time Per Output Token', '每 token 时间', '(E2EL − TTFT) / (输出 token − 1)，每请求一个值'],
   ['ITL', 'Inter-Token Latency', 'token 间隔', '相邻流式 chunk 间隔，报 P50/P99'],
   ['E2EL', 'End-to-End Latency', '端到端延迟', '请求发出 → 末 token'],
-  ['RPS', 'Requests Per Second', '请求速率', '完成请求数 / 墙钟（样本时长 ≥1s 才计算）'],
+  ['RPS', 'Requests Per Second', '请求速率', '成功请求数 / 墙钟（样本时长 ≥1s 才计算）；详情同时显示尝试速率'],
   ['Output tok/s', 'Output Throughput', '输出吞吐', '总输出 token / 墙钟时长（vLLM / SGLang 口径）。另有单请求解码口径（per-user）'],
   ['Goodput', '—', '有效吞吐', '达标请求占比。vLLM 的 request_goodput 为速率口径（req/s），本工具两个都给'],
-  ['Cache hit', 'Prompt Cache Hit Rate', '缓存命中率', '命中输入 token / 总输入 token'],
+  ['Cache hit', 'Prompt Cache Hit Rate', '缓存命中率', '命中输入 token / 总输入 token（token 口径）；请求级 hit/miss 单独计数。0% 可能是渠道未上报字段，主动探测用「缓存检测」（min 加速比判定，压测汇总为 mean 口径）'],
   ['Cached tok', 'Cached Prompt Tokens', '命中 token 数', '各厂商结构归一后的命中输入 token'],
   ['Cache probe', 'Prompt Cache Verification', '缓存检测', '同一长前缀串行 N 次主动验证。加速比判定用 min 口径（思考/排队噪声的下界），中位数对照展示；上报命中但无加速 = 疑似假缓存'],
 ];
@@ -1270,9 +1638,30 @@ UI.setPaletteProvider(() => {
 });
 
 /* ---------- 健康 ---------- */
+function syncRailStats() {
+  const runs = state.runs.size;
+  let errs = 0;
+  state.runs.forEach((r) => { errs += (r.errorCount || (r.summary && r.summary.errors) || 0); });
+  /* 顶栏错误数以 DOM 为准（含未入 Map 的历史） */
+  const topErr = document.getElementById('errCount');
+  const topRun = document.getElementById('runCount');
+  const rr = document.getElementById('railRuns');
+  const re = document.getElementById('railErrs');
+  if (rr) rr.textContent = topRun ? topRun.textContent : String(runs);
+  if (re) re.textContent = topErr ? topErr.textContent : String(errs);
+}
 async function health() {
-  try { await fetchJSON('/api/health'); $('health').className = 'led ok'; $('healthTxt').textContent = '在线'; }
-  catch { $('health').className = 'led err'; $('healthTxt').textContent = '离线'; }
+  try {
+    await fetchJSON('/api/health');
+    $('health').className = 'led ok'; $('healthTxt').textContent = '在线';
+    const rl = $('railLed'); if (rl) rl.className = 'led ok';
+    const rh = $('railHealth'); if (rh) rh.textContent = '在线';
+  } catch {
+    $('health').className = 'led err'; $('healthTxt').textContent = '离线';
+    const rl = $('railLed'); if (rl) rl.className = 'led err';
+    const rh = $('railHealth'); if (rh) rh.textContent = '离线';
+  }
+  syncRailStats();
 }
 setInterval(health, 5000);
 
@@ -1285,6 +1674,7 @@ $('btnProbe').onclick = doProbe;
 $('btnModels').onclick = doModels;
 $('btnCache').onclick = doCacheCheck;
 $('btnGlossary').onclick = showGlossary;
+$('btnGlossaryRail').onclick = showGlossary;
 $('btnSchedule').onclick = createSchedule;
 $('btnDemo').onclick = () => { $('paste').value = 'base_url: https://api.openai.com\napi_key: sk-your-key\nmodel: gpt-4o-mini'; doParse(); };
 $('mode').onchange = () => { const m = $('mode').value; $('concurrency').value = m === 'open' ? 32 : (m === 'duration' ? 4 : 2); saveCfg(); };
@@ -1348,8 +1738,12 @@ document.addEventListener('click', async (e) => {
     else if (act === 'md') window.open(`/api/runs/${id}/export.md`, '_blank');
     else if (act === 'del') {
       if (await UI.confirm('删除该运行及其全部样本？此操作不可撤销。', '删除运行')) {
-        await fetch(`/api/runs/${id}`, { method: 'DELETE' }); state.runs.delete(id); if (state.primary === id) state.primary = null;
-        UI.closeDrawer(); renderRuns(); renderCompareTable(); UI.toast('已删除', 'ok');
+        try {
+          await fetchJSON(`/api/runs/${id}`, { method: 'DELETE' });
+          state.runs.delete(id);
+          if (state.primary === id) state.primary = null;
+          UI.closeDrawer(); renderRuns(); renderCompareTable(); UI.toast('已删除', 'ok');
+        } catch (e) { UI.toast('删除失败: ' + e.message, 'err'); }
       }
     }
     return;
@@ -1362,13 +1756,19 @@ document.addEventListener('click', async (e) => {
   if (del) { await fetch(`/api/schedules/${del.dataset.sid}`, { method: 'DELETE' }); loadSchedules(); UI.toast('定时任务已删除', 'ok'); }
 });
 
-/* ---------- 面板高度拖拽 ---------- */
+/* ---------- 面板高度/宽度拖拽（垂直 + 横向列宽，角点可同时调） ---------- */
 const PANEL_H_KEY = 'llmbench.panelH';
+const PANEL_W_KEY = 'llmbench.panelW';
 function panelHeights() {
   try { return JSON.parse(localStorage.getItem(PANEL_H_KEY) || '{}'); } catch { return {}; }
 }
+function panelSpans() {
+  try { return JSON.parse(localStorage.getItem(PANEL_W_KEY) || '{}'); } catch { return {}; }
+}
+function savePanelSpans(sp) { try { localStorage.setItem(PANEL_W_KEY, JSON.stringify(sp)); } catch { /* ignore */ } }
 function initPanelResize() {
   const saved = panelHeights();
+  const spans = panelSpans();
   document.querySelectorAll('.panel-grid > .panel, .bottom-panel').forEach((panel) => {
     const key = panel.dataset.panel;
     if (!key) return;
@@ -1376,15 +1776,37 @@ function initPanelResize() {
       if (panel.classList.contains('bottom-panel')) panel.style.setProperty('--panes-h', saved[key] + 'px');
       else panel.style.setProperty('--ph', saved[key] + 'px');
     }
+    // 恢复列宽（仅 grid 内 panel；bottom-panel 不占栅格列）
+    if (!panel.classList.contains('bottom-panel') && spans[key]) {
+      panel.style.gridColumn = `span ${spans[key]}`;
+    }
     const hnd = document.createElement('div');
     hnd.className = 'rs-h';
     hnd.setAttribute('role', 'separator');
     hnd.setAttribute('aria-orientation', 'horizontal');
     hnd.setAttribute('tabindex', '0');
-    hnd.title = '拖拽调整高度 · 双击复位 · ↑/↓ 微调';
+    hnd.title = '拖边缘调高 · 拖右缘/角点调宽 · 双击复位 · ↑/↓ 微调';
     panel.appendChild(hnd);
 
-    const apply = (px) => {
+    const isGrid = !panel.classList.contains('bottom-panel');
+    let whnd = null;
+    if (isGrid) {
+      whnd = document.createElement('div');
+      whnd.className = 'rs-w';
+      whnd.setAttribute('role', 'separator');
+      whnd.setAttribute('aria-orientation', 'vertical');
+      whnd.setAttribute('tabindex', '0');
+      whnd.title = '拖拽调整宽度（列数） · 双击复位';
+      panel.appendChild(whnd);
+    }
+    const cnd = document.createElement('div');
+    cnd.className = 'rs-c';
+    cnd.setAttribute('role', 'separator');
+    cnd.setAttribute('tabindex', '0');
+    cnd.title = '角点拖拽：同时调宽高 · 双击复位';
+    panel.appendChild(cnd);
+
+    const applyH = (px) => {
       const clamped = Math.max(120, Math.min(800, Math.round(px)));
       if (panel.classList.contains('bottom-panel')) panel.style.setProperty('--panes-h', clamped + 'px');
       else panel.style.setProperty('--ph', clamped + 'px');
@@ -1392,41 +1814,90 @@ function initPanelResize() {
       hnd.setAttribute('aria-valuenow', clamped);
       return clamped;
     };
+    const applyW = (span) => {
+      if (!isGrid) return;
+      const s = Math.max(3, Math.min(12, Math.round(span)));
+      panel.style.gridColumn = `span ${s}`;
+      spans[key] = s;
+      if (whnd) whnd.setAttribute('aria-valuenow', String(s));
+    };
     const curH = () => (panel.classList.contains('bottom-panel')
       ? (panel.querySelector('.panes')?.getBoundingClientRect().height || 320)
       : panel.getBoundingClientRect().height);
-
-    let startY = 0, startH = 0;
-    hnd.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0 || panel.classList.contains('fullscreen')) return;
-      e.preventDefault();
-      hnd.setPointerCapture(e.pointerId);
-      startY = e.clientY;
-      startH = curH();
-      document.body.classList.add('panel-resizing');
-    });
-    hnd.addEventListener('pointermove', (e) => {
-      if (!hnd.hasPointerCapture(e.pointerId)) return;
-      apply(startH + e.clientY - startY);
-    });
-    const end = (e) => {
-      if (hnd.hasPointerCapture(e.pointerId)) hnd.releasePointerCapture(e.pointerId);
-      document.body.classList.remove('panel-resizing');
-      try { localStorage.setItem(PANEL_H_KEY, JSON.stringify(saved)); } catch { /* ignore */ }
+    const curSpan = () => {
+      if (!isGrid) return 6;
+      const m = (panel.style.gridColumn || '').match(/span\s+(\d+)/);
+      if (m) return Number(m[1]);
+      // 类名形如 w7h2：只取 w 后的列数，不能把 h2 的 2 也吃进去
+      const cls = ['w5h2', 'w6h2', 'w7h2', 'w5', 'w6', 'w7'].find((c) => panel.classList.contains(c));
+      const wm = cls && cls.match(/w(\d+)/);
+      return wm ? Number(wm[1]) : 6;
     };
-    hnd.addEventListener('pointerup', end);
-    hnd.addEventListener('pointercancel', end);
-    hnd.addEventListener('dblclick', () => {
+    const colPx = () => {
+      const grid = panel.parentElement;
+      if (!grid || grid.clientWidth < 80) return 80;
+      const cols = 12;
+      const gap = parseFloat(getComputedStyle(grid).gap) || 12;
+      const col = (grid.clientWidth - gap * (cols - 1)) / cols;
+      return col > 8 ? col : 80; // 防 0/负列宽导致 span 瞬间顶满
+    };
+
+    const startDrag = (handle, mode) => {
+      handle.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0 || panel.classList.contains('fullscreen')) return;
+        e.preventDefault();
+        handle.setPointerCapture(e.pointerId);
+        startY = e.clientY; startX = e.clientX;
+        startH = curH(); startW = curSpan(); startCol = colPx();
+        document.body.classList.add('panel-resizing');
+        dragMode = mode;
+      });
+      handle.addEventListener('pointermove', (e) => {
+        if (!handle.hasPointerCapture(e.pointerId)) return;
+        if (mode !== 'w') applyH(startH + e.clientY - startY);
+        if (mode !== 'h' && isGrid) applyW(startW + (e.clientX - startX) / (startCol + (parseFloat(getComputedStyle(panel.parentElement).gap) || 12)));
+      });
+      const end = (e) => {
+        if (handle.hasPointerCapture(e.pointerId)) handle.releasePointerCapture(e.pointerId);
+        document.body.classList.remove('panel-resizing');
+        dragMode = '';
+        try { localStorage.setItem(PANEL_H_KEY, JSON.stringify(saved)); } catch { /* ignore */ }
+        if (isGrid) savePanelSpans(spans);
+      };
+      handle.addEventListener('pointerup', end);
+      handle.addEventListener('pointercancel', end);
+    };
+    let startY = 0, startX = 0, startH = 0, startW = 6, startCol = 80, dragMode = '';
+
+    startDrag(hnd, 'h');
+    if (whnd) startDrag(whnd, 'w');
+    startDrag(cnd, 'hw');
+    // 手柄可聚焦，保证 ←/→ 键盘调宽可用（pointer capture 后 focus 可能丢失）
+    [hnd, whnd, cnd].filter(Boolean).forEach((el) => {
+      el.addEventListener('pointerdown', () => { try { el.focus({ preventScroll: true }); } catch { /* ignore */ } });
+    });
+
+    const reset = () => {
       delete saved[key];
+      delete spans[key];
       try { localStorage.setItem(PANEL_H_KEY, JSON.stringify(saved)); } catch { /* ignore */ }
+      savePanelSpans(spans);
       panel.style.removeProperty('--ph');
       panel.style.removeProperty('--panes-h');
-    });
+      if (isGrid) panel.style.removeProperty('grid-column');
+    };
+    [hnd, whnd, cnd].filter(Boolean).forEach((el) => el.addEventListener('dblclick', reset));
     hnd.addEventListener('keydown', (e) => {
       if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
       e.preventDefault();
-      apply(curH() + (e.key === 'ArrowUp' ? 40 : -40));
+      applyH(curH() + (e.key === 'ArrowUp' ? 40 : -40));
       try { localStorage.setItem(PANEL_H_KEY, JSON.stringify(saved)); } catch { /* ignore */ }
+    });
+    if (whnd) whnd.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      applyW(curSpan() + (e.key === 'ArrowRight' ? 1 : -1));
+      savePanelSpans(spans);
     });
   });
 }
@@ -1595,9 +2066,23 @@ function initPinParams() {
 if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
 
 loadCfg();
+$('btnSavePreset').onclick = savePreset;
+$('btnLoadPreset').onclick = () => {
+  const name = ($('preset_name')?.value || '').trim() || readPresets()[0]?.name;
+  if (name) loadPreset(name);
+  else UI.toast('还没有保存的测试方案', 'warn');
+};
+$('c_preset').onchange = () => {
+  const prefix = { openai: 1024, qwen: 1024, deepseek: 1024, kimi: 1024, anthropic: 2048 }[$('c_preset').value];
+  if (prefix) $('c_prefix').value = prefix;
+  saveCfg();
+};
+renderPresets();
 initPinParams();
 initPanelResize();
-setSidebar(localStorage.getItem('llmbench.sidebar') !== '0');
+const savedSidebar = localStorage.getItem('llmbench.sidebar');
+const narrowSidebar = window.matchMedia('(max-width: 1100px)').matches;
+setSidebar(savedSidebar == null ? !narrowSidebar : savedSidebar === '1');
 summaryEmpty();
 renderRuns();
 renderCompareTable();

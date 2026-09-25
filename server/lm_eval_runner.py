@@ -47,6 +47,7 @@ TASKS: dict[str, dict[str, Any]] = {
         "metric": "exact_match",
         "fewshot": 5,
         "logprobs": False,
+        "leaves": 57,
         "desc": "57 学科选择题，生成式判分，无需 logprobs",
     },
     "mmlu": {
@@ -143,7 +144,11 @@ def list_tasks() -> list[dict[str, Any]]:
 
 def _endpoint(target: Target) -> str:
     base = target.base_url.rstrip("/")
-    if target.provider == Provider.anthropic:
+    if target.path:
+        p = target.path
+        if p.startswith("http://") or p.startswith("https://"):
+            return p
+    elif target.provider == Provider.anthropic:
         p = "/v1/messages"
     else:
         p = "/v1/chat/completions"
@@ -165,15 +170,22 @@ def build_cmd(
 
     if target.provider == Provider.anthropic:
         model = "anthropic-chat"
-        args = f"model={target.model},api_key={target.api_key},max_tokens={int(opts.get('max_tokens', 512))}"
-        if target.base_url and "api.anthropic.com" not in target.base_url:
-            args += f",base_url={target.base_url}"
+        args = (
+            f"model={target.model},api_key={target.api_key},"
+            f"num_concurrent={concurrent},max_gen_toks={int(opts.get('max_tokens', 512))},"
+            f"temperature={float(opts.get('temperature', 0.0))},"
+            f"base_url={_endpoint(target)},timeout={int(opts.get('timeout_s', 120))},"
+            f"verify_certificate={bool(opts.get('verify_tls', True))}"
+        )
     else:
-        model = "local-chat-completions"
+        model = "openai-chat-completions"
         args = (
             f"base_url={_endpoint(target)},model={target.model},"
             f"api_key={target.api_key},num_concurrent={concurrent},"
-            f"max_tokens={int(opts.get('max_tokens', 512))}"
+            f"max_gen_toks={int(opts.get('max_tokens', 512))},"
+            f"temperature={float(opts.get('temperature', 0.0))},"
+            f"timeout={int(opts.get('timeout_s', 120))},"
+            f"verify_certificate={bool(opts.get('verify_tls', True))}"
         )
 
     cmd = [
@@ -185,8 +197,6 @@ def build_cmd(
         args,
         "--tasks",
         ",".join(tasks),
-        "--limit",
-        str(limit),
         "--seed",
         seed,
         "--apply_chat_template",
@@ -194,6 +204,8 @@ def build_cmd(
         "--output_path",
         str(out_dir / "result.json"),
     ]
+    if limit > 0:
+        cmd += ["--limit", str(limit)]
     if fewshot is not None:
         cmd += ["--num_fewshot", str(int(fewshot))]
     return cmd
@@ -236,13 +248,31 @@ def scrub_dir(out_dir: Path) -> int:
     return n
 
 
-def _env() -> dict[str, str]:
+def _env(target: Target | None = None, proxy: str | None = None) -> dict[str, str]:
     env = dict(os.environ)
     env["HF_ENDPOINT"] = HF_MIRROR  # 国内必须走镜像
     env["PYTHONUNBUFFERED"] = "1"
     env["TOKENIZERS_PARALLELISM"] = "false"
     # launchd 下 PATH 很干净，补上 venv bin 避免子进程找不到东西
     env["PATH"] = f"{Path(sys.executable).parent}:{env.get('PATH', '/usr/bin:/bin')}"
+    if target is not None:
+        from .providers import is_loopback
+
+        if proxy:
+            env["HTTP_PROXY"] = proxy
+            env["HTTPS_PROXY"] = proxy
+        if is_loopback(target.base_url):
+            for key in (
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+            ):
+                env.pop(key, None)
+            env["NO_PROXY"] = "*"
+            env["no_proxy"] = "*"
     return env
 
 
@@ -273,8 +303,12 @@ async def run(
         }
     )
 
-    env = _env()
+    env = _env(target, opts.get("proxy"))
     env["LMEVAL_ARGV"] = json.dumps(cmd, ensure_ascii=False)
+    if target.provider == Provider.anthropic:
+        env["ANTHROPIC_API_KEY"] = target.api_key
+    else:
+        env["OPENAI_API_KEY"] = target.api_key
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
         "-c",
@@ -290,50 +324,56 @@ async def run(
     buf = ""
     try:
         assert proc.stdout
-        while True:
-            if should_stop() and proc.returncode is None:
-                proc.terminate()
-                break
-            chunk = await proc.stdout.read(512)
-            if not chunk:
-                break
-            buf += chunk.decode("utf-8", "replace")
-            # tqdm 用 \r 刷新，必须同时按 \r 和 \n 切
-            parts = re.split(r"[\r\n]", buf)
-            buf = parts.pop()
-            for line in parts:
-                m = _TASK_RE.search(line)
-                if m:
-                    cur_task = m.group(1)
-                    last_pct = -1
-                if _RUNNING_RE.search(line):
-                    on_event(
-                        {
-                            "type": "phase",
-                            "phase": "lm_eval",
-                            "state": "running",
-                            "task": cur_task,
-                        }
-                    )
-                p = _TQDM_RE.search(line)
-                if p:
-                    pct = int(p.group(1))
-                    if pct != last_pct:
-                        last_pct = pct
+        async with asyncio.timeout(float(opts.get("lm_eval_timeout_s", 1800))):
+            while True:
+                if should_stop() and proc.returncode is None:
+                    proc.terminate()
+                    break
+                chunk = await proc.stdout.read(512)
+                if not chunk:
+                    break
+                buf += chunk.decode("utf-8", "replace")
+                parts = re.split(r"[\r\n]", buf)
+                buf = parts.pop()
+                for line in parts:
+                    m = _TASK_RE.search(line)
+                    if m:
+                        cur_task = m.group(1)
+                        last_pct = -1
+                    if _RUNNING_RE.search(line):
                         on_event(
                             {
                                 "type": "phase",
                                 "phase": "lm_eval",
-                                "state": "progress",
+                                "state": "running",
                                 "task": cur_task,
-                                "percent": pct,
                             }
                         )
-        await proc.wait()
+                    p = _TQDM_RE.search(line)
+                    if p:
+                        pct = int(p.group(1))
+                        if pct != last_pct:
+                            last_pct = pct
+                            on_event(
+                                {
+                                    "type": "phase",
+                                    "phase": "lm_eval",
+                                    "state": "progress",
+                                    "task": cur_task,
+                                    "percent": pct,
+                                }
+                            )
+            await proc.wait()
+            if not should_stop() and proc.returncode not in (0, None):
+                raise RuntimeError(f"lm-eval 退出码 {proc.returncode}")
+    except TimeoutError:
+        on_event({"type": "phase", "phase": "lm_eval", "state": "timeout"})
+        raise RuntimeError("lm-eval 执行超时") from None
     finally:
         if proc.returncode is None:
             proc.kill()
             await proc.wait()
+        scrub_dir(out_dir)
 
     if should_stop():
         on_event({"type": "phase", "phase": "lm_eval", "state": "stopped"})
@@ -345,6 +385,13 @@ async def run(
 # --------------------------------------------------------------------------
 # 解析
 # --------------------------------------------------------------------------
+def _as_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _pick_metric(res: dict, want: str) -> tuple[float | None, float | None, str]:
     """从任务结果里挑指标值。lm-eval 的键形如 `exact_match,flexible-extract`。"""
     keys = [k for k in res if k.startswith(want) and not k.endswith("_stderr")]
@@ -354,11 +401,7 @@ def _pick_metric(res: dict, want: str) -> tuple[float | None, float | None, str]
     key = keys[0]
     val = res.get(key)
     err = res.get(f"{key}_stderr")
-    return (
-        float(val) if val is not None else None,
-        float(err) if err is not None else None,
-        key,
-    )
+    return _as_float(val), _as_float(err), key
 
 
 def _item_passed(rec: dict, metric: str) -> bool:
@@ -368,11 +411,31 @@ def _item_passed(rec: dict, metric: str) -> bool:
             return float(rec[k]) > 0.5
     ms = rec.get("metrics") or []
     if ms:
+        if all(isinstance(m, str) for m in ms):
+            preferred = [m for m in ms if m == metric or m.startswith(metric + ",")]
+            if not preferred:
+                preferred = [m for m in ms if m in {"acc_norm", "acc", "exact_match"}]
+            return bool(preferred) and all(
+                float(rec.get(m, 0)) > 0.5 for m in preferred
+            )
         try:
             return all(float(m) > 0.5 for m in ms)
         except Exception:
             return False
     return False
+
+
+def _sample_rank(rec: dict, metric: str) -> tuple[int, str]:
+    metrics = rec.get("metrics") or []
+    names = {str(x) for x in metrics if isinstance(x, str)}
+    if metric in names or metric.split(",")[0] in names:
+        return 0, ""
+    filter_value = str(rec.get("filter") or "").lower()
+    if "flexible" in metric.lower():
+        return (0 if "flexible" in filter_value else 2), filter_value
+    if "strict" in filter_value:
+        return 1, filter_value
+    return 2, filter_value
 
 
 def _load_samples(out_dir: Path) -> dict[str, dict[str, Any]]:
@@ -390,14 +453,39 @@ def _load_samples(out_dir: Path) -> dict[str, dict[str, Any]]:
         leaf = m.group(1) if m else Path(f).stem.replace("samples_", "")
         metric = "exact_match"
         # 从结果 JSON 反查该叶子的指标名（acc / acc_norm / exact_match）
-        rec = out.setdefault(leaf, {"items": {}, "got": {}})
+        rec = out.setdefault(
+            leaf, {"items": {}, "got": {}, "filters": {}, "records": []}
+        )
         try:
             for line in Path(f).read_text(encoding="utf-8").splitlines():
                 if not line.strip():
                     continue
                 r = json.loads(line)
+                rec["records"].append(r)
                 ok = _item_passed(r, metric)
                 doc = str(r.get("doc_id"))
+                filter_value = r.get("filter")
+                if isinstance(filter_value, list):
+                    filter_value = ",".join(str(x) for x in filter_value)
+                filter_key = str(filter_value or "")
+                old_filter = rec["filters"].get(doc, "")
+                rank = (
+                    0
+                    if "flexible" in filter_key.lower()
+                    else 1
+                    if "strict" in filter_key.lower()
+                    else 2
+                )
+                old_rank = (
+                    0
+                    if "flexible" in old_filter.lower()
+                    else 1
+                    if "strict" in old_filter.lower()
+                    else 2
+                )
+                if doc in rec["items"] and rank >= old_rank:
+                    continue
+                rec["filters"][doc] = filter_key
                 rec["items"][doc] = ok
                 fr = r.get("filtered_resps") or r.get("resps") or []
                 try:
@@ -463,11 +551,19 @@ def parse(
             sm = all_samples.get(leaf)
             if not sm:
                 continue
-            for doc, ok in sm["items"].items():
-                per_item[f"{leaf}:{doc}"] = (
-                    ok  # 叶子名+doc_id，避免不同学科 doc_id 冲突
-                )
-                got[f"{leaf}:{doc}"] = sm["got"].get(doc, "")
+            records = sorted(
+                sm.get("records") or [], key=lambda r: _sample_rank(r, want)
+            )
+            for record in records:
+                doc = str(record.get("doc_id"))
+                item_id = f"{leaf}:{doc}"
+                if item_id in per_item:
+                    continue
+                per_item[item_id] = _item_passed(record, want)
+                fr = record.get("filtered_resps") or record.get("resps") or []
+                got[item_id] = str(fr[0])[:300] if fr else ""
+        if leaves and not per_item:
+            raise RuntimeError(f"lm-eval 未产出 {task} 的逐题样本")
 
         n = len(per_item)
         k = sum(1 for v in per_item.values() if v)

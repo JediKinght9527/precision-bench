@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 from pathlib import Path
@@ -18,7 +19,7 @@ CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY,
   name TEXT, provider TEXT, base_url_masked TEXT, model TEXT,
   params_json TEXT, slo_json TEXT, schedule_cron TEXT,
-  started_at REAL, ended_at REAL, status TEXT
+  started_at REAL, ended_at REAL, status TEXT, summary_json TEXT
 );
 CREATE TABLE IF NOT EXISTS samples (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,6 +30,7 @@ CREATE TABLE IF NOT EXISTS samples (
   tpot_ms REAL, itl_mean_ms REAL, itl_p99_ms REAL,
   out_tokens INTEGER, in_tokens INTEGER,
   cached_tokens INTEGER, cache_write_tokens INTEGER,
+  cache_reported INTEGER,
   tokens_estimated INTEGER,
   status_code INTEGER, ok INTEGER, retry_no INTEGER,
   error_class TEXT, error_msg TEXT, bytes_rx INTEGER, conn_reused INTEGER
@@ -73,6 +75,7 @@ CREATE TABLE IF NOT EXISTS cache_baselines (
 # 索引单独一段：必须先建表、补齐老库缺失列，最后才建索引
 _SCHEMA_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_samples_run_ts ON samples(run_id, ts);
+CREATE INDEX IF NOT EXISTS idx_samples_run_seq ON samples(run_id, seq);
 CREATE INDEX IF NOT EXISTS idx_bench_runs_pair ON bench_runs(base_url_masked, model, ts);
 CREATE INDEX IF NOT EXISTS idx_bench_items_run ON bench_items(run_id);
 CREATE INDEX IF NOT EXISTS idx_cache_checks_pair ON cache_checks(base_url_masked, model, ts);
@@ -83,8 +86,10 @@ class Store:
     def __init__(self, path: str | Path):
         self.path = str(path)
         self._db: aiosqlite.Connection | None = None
-        self._queue: asyncio.Queue[SampleRecord | None] = asyncio.Queue()
+        self._queue: asyncio.Queue[SampleRecord | None] = asyncio.Queue(maxsize=2000)
         self._writer: asyncio.Task | None = None
+        self._writer_error: Exception | None = None
+        self._closing = False
 
     async def init(self) -> None:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
@@ -163,39 +168,131 @@ class Store:
                     except Exception:
                         pass
 
+        try:
+            async with self._db.execute(
+                "SELECT b.base_url,b.model,b.task_key,b.bench_run_id,r.engine,r.dims_json,r.opts_json,r.provider,r.lm_eval_version "
+                "FROM bench_baselines b LEFT JOIN bench_runs r ON r.run_id=b.bench_run_id"
+            ) as cur:
+                baseline_rows = await cur.fetchall()
+            for (
+                base_url,
+                model,
+                task_key,
+                _rid,
+                engine,
+                dims_json,
+                opts_json,
+                provider,
+                lm_eval_version,
+            ) in baseline_rows:
+                opts = json.loads(opts_json or "{}")
+                engine = engine or opts.get("engine") or "curated"
+                lm_eval_version = lm_eval_version or opts.get("lm_eval_version")
+                dims = json.loads(dims_json or "[]")
+                parts = [f"{engine}:" + ",".join(sorted(dims))]
+                if engine == "lm_eval":
+                    parts.append(f"provider={provider}")
+                for key in (
+                    "limit",
+                    "fewshot",
+                    "seed",
+                    "max_tokens",
+                    "temperature",
+                    "needle_tokens",
+                ):
+                    if key in opts:
+                        parts.append(f"{key}={opts.get(key)}")
+                if engine == "lm_eval" and lm_eval_version:
+                    parts.append(f"lm_eval_version={lm_eval_version}")
+                normalized = "|".join(parts)
+                if normalized != task_key:
+                    await self._db.execute(
+                        "UPDATE bench_baselines SET task_key=? WHERE base_url=? AND model=? AND task_key=?",
+                        (normalized, base_url, model, task_key),
+                    )
+        except Exception:
+            pass
+
     async def close(self) -> None:
-        if self._writer:
+        self._closing = True
+        if self._writer and not self._writer.done():
             await self._queue.put(None)
             await self._writer
         if self._db:
             await self._db.close()
 
+    def _drain_queue(self) -> None:
+        while True:
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            else:
+                self._queue.task_done()
+
     async def _write_loop(self) -> None:
         assert self._db
+        loop = asyncio.get_running_loop()
         batch: list[SampleRecord] = []
         while True:
             item = await self._queue.get()
             if item is None:
-                if batch:
-                    await self._flush(batch)
+                try:
+                    if batch:
+                        await self._flush_with_retry(batch)
+                except Exception as exc:  # noqa: BLE001
+                    self._writer_error = exc
+                    logging.getLogger("llmbench.store").exception(
+                        "样本 writer 关闭前写入失败"
+                    )
+                finally:
+                    for _ in range(len(batch)):
+                        self._queue.task_done()
+                    self._queue.task_done()
                 return
             batch.append(item)
-            if len(batch) >= 50:
-                await self._flush(batch)
-                batch = []
-            else:
-                # 尝试小批量聚合
+            stop = False
+            deadline = loop.time() + 0.05
+            while len(batch) < 50:
+                timeout = deadline - loop.time()
+                if timeout <= 0:
+                    break
                 try:
-                    while len(batch) < 50:
-                        nxt = self._queue.get_nowait()
-                        if nxt is None:
-                            await self._flush(batch)
-                            return
-                        batch.append(nxt)
-                except asyncio.QueueEmpty:
-                    pass
+                    nxt = await asyncio.wait_for(self._queue.get(), timeout)
+                except asyncio.TimeoutError:
+                    break
+                if nxt is None:
+                    stop = True
+                    break
+                batch.append(nxt)
+            try:
+                if batch:
+                    await self._flush_with_retry(batch)
+            except Exception as exc:  # noqa: BLE001
+                self._writer_error = exc
+                logging.getLogger("llmbench.store").exception("样本 writer 失败")
+                for _ in range(len(batch)):
+                    self._queue.task_done()
+                self._drain_queue()
+                return
+            for _ in range(len(batch)):
+                self._queue.task_done()
+            batch = []
+            if stop:
+                self._queue.task_done()
+                return
+
+    async def _flush_with_retry(self, batch: list[SampleRecord]) -> None:
+        for attempt in range(3):
+            try:
                 await self._flush(batch)
-                batch = []
+                return
+            except Exception:
+                assert self._db
+                await self._db.rollback()
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(0.05 * (attempt + 1))
 
     async def _flush(self, batch: list[SampleRecord]) -> None:
         assert self._db
@@ -221,6 +318,7 @@ class Store:
                 s.in_tokens,
                 s.cached_tokens,
                 s.cache_write_tokens,
+                int(s.cache_reported),
                 int(s.tokens_estimated),
                 s.status_code,
                 int(s.ok),
@@ -236,15 +334,26 @@ class Store:
             """INSERT INTO samples (run_id,target,seq,ts,scheduled_ts,send_ts,
                dns_ms,tcp_ms,tls_ms,ttft_ms,e2e_ms,observed_e2e_ms,corrected_e2e_ms,
                tpot_ms,itl_mean_ms,itl_p99_ms,out_tokens,in_tokens,
-               cached_tokens,cache_write_tokens,tokens_estimated,
+               cached_tokens,cache_write_tokens,cache_reported,tokens_estimated,
                status_code,ok,retry_no,error_class,error_msg,bytes_rx,conn_reused)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             rows,
         )
         await self._db.commit()
 
-    def enqueue(self, sample: SampleRecord) -> None:
-        self._queue.put_nowait(sample)
+    async def flush(self) -> None:
+        if self._writer_error:
+            raise RuntimeError("store writer failed") from self._writer_error
+        await asyncio.wait_for(self._queue.join(), timeout=30)
+
+    async def enqueue(self, sample: SampleRecord) -> None:
+        if self._closing:
+            raise RuntimeError("store is closing")
+        if self._writer_error:
+            raise RuntimeError("store writer failed") from self._writer_error
+        if self._writer and self._writer.done():
+            raise RuntimeError("store writer stopped")
+        await self._queue.put(sample)
 
     async def create_run(
         self, run_id: str, cfg: RunConfig, schedule_cron: str | None = None
@@ -283,6 +392,14 @@ class Store:
             )
         await self._db.commit()
 
+    async def set_summary(self, run_id: str, summary: dict[str, Any]) -> None:
+        assert self._db
+        await self._db.execute(
+            "UPDATE runs SET summary_json=? WHERE run_id=?",
+            (json.dumps(summary, ensure_ascii=False), run_id),
+        )
+        await self._db.commit()
+
     async def get_run(self, run_id: str) -> dict | None:
         assert self._db
         self._db.row_factory = aiosqlite.Row
@@ -297,11 +414,11 @@ class Store:
         否则界面会一直显示幽灵运行。"""
         assert self._db
         cur = await self._db.execute(
-            "UPDATE runs SET status='stopped', ended_at=? WHERE status IN ('running','pending','paused')",
+            "UPDATE runs SET status='stopped', ended_at=? WHERE status IN ('running','pending','paused','stopping')",
             (time.time(),),
         )
         await self._db.execute(
-            "UPDATE bench_runs SET status='stopped' WHERE status IN ('running','pending')"
+            "UPDATE bench_runs SET status='stopped' WHERE status IN ('running','pending','stopping')"
         )
         await self._db.commit()
         return cur.rowcount or 0
@@ -310,26 +427,76 @@ class Store:
         assert self._db
         self._db.row_factory = aiosqlite.Row
         async with self._db.execute(
-            "SELECT r.*, (SELECT COUNT(*) FROM samples s WHERE s.run_id=r.run_id) AS total, (SELECT COUNT(*) FROM samples s WHERE s.run_id=r.run_id AND s.ok=1) AS ok FROM runs r ORDER BY started_at DESC LIMIT ?",
+            "SELECT r.*, COUNT(s.id) AS total, COALESCE(SUM(CASE WHEN s.ok=1 THEN 1 ELSE 0 END), 0) AS ok "
+            "FROM runs r LEFT JOIN samples s ON s.run_id=r.run_id "
+            "GROUP BY r.run_id ORDER BY r.started_at DESC LIMIT ?",
             (limit,),
         ) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
+    async def list_active_runs(self) -> list[dict]:
+        assert self._db
+        self._db.row_factory = aiosqlite.Row
+        async with self._db.execute(
+            "SELECT r.*, COUNT(s.id) AS total, COALESCE(SUM(CASE WHEN s.ok=1 THEN 1 ELSE 0 END), 0) AS ok "
+            "FROM runs r LEFT JOIN samples s ON s.run_id=r.run_id "
+            "WHERE r.status IN ('running','pending','stopping','paused') "
+            "GROUP BY r.run_id ORDER BY r.started_at DESC"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
     async def get_samples(
-        self, run_id: str, since: float | None = None, until: float | None = None
+        self,
+        run_id: str,
+        since: float | None = None,
+        until: float | None = None,
+        max_points: int | None = None,
     ) -> list[dict]:
         assert self._db
         self._db.row_factory = aiosqlite.Row
-        q = "SELECT * FROM samples WHERE run_id=?"
+        where = ["s.run_id=?"]
         args: list[Any] = [run_id]
         if since is not None:
-            q += " AND ts>=?"
+            where.append("s.ts>=?")
             args.append(since)
         if until is not None:
-            q += " AND ts<=?"
+            where.append("s.ts<=?")
             args.append(until)
-        q += " ORDER BY seq ASC"
+        clause = " AND ".join(where)
+        if max_points is not None and max_points > 0:
+            async with self._db.execute(
+                f"SELECT COUNT(*) FROM samples s WHERE {clause}", args
+            ) as cur:
+                row = await cur.fetchone()
+                count = int(row[0] if row else 0)
+            if count > max_points:
+                step = (count + max_points - 1) // max_points
+                q = f"""
+                    SELECT s.* FROM samples s
+                    JOIN (
+                        SELECT id, ROW_NUMBER() OVER (ORDER BY seq) AS rn
+                        FROM samples s WHERE {clause}
+                    ) picked ON picked.id=s.id
+                    WHERE picked.rn=1 OR picked.rn%{step}=0 OR picked.rn=?
+                    ORDER BY s.seq ASC
+                """
+                args = [*args, count]
+                async with self._db.execute(q, args) as cur:
+                    rows = list(await cur.fetchall())
+                if len(rows) > max_points:
+                    selected = (
+                        [
+                            round(i * (len(rows) - 1) / (max_points - 1))
+                            for i in range(max_points)
+                        ]
+                        if max_points > 1
+                        else [0]
+                    )
+                    rows = [rows[i] for i in selected]
+                return [dict(r) for r in rows]
+        q = f"SELECT s.* FROM samples s WHERE {clause} ORDER BY s.seq ASC"
         async with self._db.execute(q, args) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
@@ -397,7 +564,20 @@ class Store:
         assert self._db
         dims = opts.get("dims", [])
         engine = opts.get("engine", "curated")
-        task_key = f"{engine}:" + ",".join(sorted(dims))
+        task_parts = [f"{engine}:" + ",".join(sorted(dims))]
+        if engine == "lm_eval":
+            task_parts.append(f"provider={target.provider.value}")
+        for key in (
+            "limit",
+            "fewshot",
+            "seed",
+            "max_tokens",
+            "temperature",
+            "needle_tokens",
+        ):
+            if key in opts:
+                task_parts.append(f"{key}={opts.get(key)}")
+        task_key = "|".join(task_parts)
         await self._db.execute(
             "INSERT OR REPLACE INTO bench_runs (run_id,ts,name,provider,base_url_masked,model,"
             "dims_json,opts_json,scores_json,total_score,n_items,completed,fingerprint,status,"
@@ -428,6 +608,13 @@ class Store:
                 opts.get("limit"),
                 opts.get("seed"),
             ),
+        )
+        await self._db.commit()
+
+    async def set_bench_task_key(self, run_id: str, task_key: str) -> None:
+        assert self._db
+        await self._db.execute(
+            "UPDATE bench_runs SET task_key=? WHERE run_id=?", (task_key, run_id)
         )
         await self._db.commit()
 
@@ -468,10 +655,11 @@ class Store:
             ],
         )
         await self._db.execute(
-            "UPDATE bench_runs SET scores_json=?, total_score=?, completed=?, fingerprint=? WHERE run_id=?",
+            "UPDATE bench_runs SET scores_json=?, total_score=?, n_items=?, completed=?, fingerprint=? WHERE run_id=?",
             (
                 json.dumps(scores, ensure_ascii=False),
                 scores.get("total", 0.0),
+                max(int(scores.get("n_items", 0) or 0), len(items)),
                 scores.get("completed", len(items)),
                 fingerprint,
                 run_id,
@@ -519,6 +707,9 @@ class Store:
 
     async def delete_bench_run(self, run_id: str) -> None:
         assert self._db
+        await self._db.execute(
+            "DELETE FROM bench_baselines WHERE bench_run_id=?", (run_id,)
+        )
         await self._db.execute("DELETE FROM bench_items WHERE run_id=?", (run_id,))
         await self._db.execute("DELETE FROM bench_runs WHERE run_id=?", (run_id,))
         await self._db.commit()
@@ -537,7 +728,14 @@ class Store:
             return None
         d = dict(row)
         run = await self.get_bench_run(d["bench_run_id"])
-        d["scores"] = run["scores"] if run else {}
+        if not run:
+            await self._db.execute(
+                "DELETE FROM bench_baselines WHERE base_url=? AND model=? AND task_key=?",
+                (base_url, model, task_key),
+            )
+            await self._db.commit()
+            return None
+        d["scores"] = run["scores"]
         return d
 
     async def set_baseline(
@@ -586,11 +784,12 @@ class Store:
         )
         await self._db.commit()
 
-    async def list_cache_checks(self, limit: int = 100) -> list[dict]:
+    async def list_cache_checks(self, limit: int = 100, offset: int = 0) -> list[dict]:
         assert self._db
         self._db.row_factory = aiosqlite.Row
         async with self._db.execute(
-            "SELECT * FROM cache_checks ORDER BY ts DESC LIMIT ?", (limit,)
+            "SELECT * FROM cache_checks ORDER BY ts DESC LIMIT ? OFFSET ?",
+            (limit, offset),
         ) as cur:
             rows = await cur.fetchall()
         out = []
@@ -639,6 +838,8 @@ class Store:
         check = await self.get_cache_check(d["check_id"])
         if check:
             s = check.get("summary") or {}
+            if s.get("speedup_min") is not None:
+                d["speedup"] = s.get("speedup_min")
             d["ttft_hit_mean"] = s.get("ttft_hit_mean")
             d["ttft_first"] = s.get("ttft_first")
             d["verdict"] = s.get("verdict")
@@ -650,7 +851,7 @@ class Store:
         assert self._db
         await self._db.execute(
             "INSERT OR REPLACE INTO cache_baselines (base_url,model,check_id,speedup,ts) VALUES (?,?,?,?,?)",
-            (base_url, model, check_id, speedup or 0.0, time.time()),
+            (base_url, model, check_id, speedup, time.time()),
         )
         await self._db.commit()
 

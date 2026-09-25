@@ -172,6 +172,75 @@ def test_detect_provider():
     )
     assert detect_provider("https://api.openai.com", "gpt-4o") == Provider.openai
     assert detect_provider("https://relay.com", "claude-3-opus") == Provider.anthropic
+    assert (
+        detect_provider("https://openrouter.ai/api/v1", "stealth/space-bunny-alpha")
+        == Provider.openrouter
+    )
+    assert detect_provider("", "gpt-4o", "sk-or-v1-abc123") == Provider.openrouter
+
+
+def test_openrouter_key_only_autofills_base_url():
+    """只有 sk-or- 密钥 + 模型：自动归类 openrouter 并补默认地址。"""
+    ts = parse_paste("api_key: sk-or-v1-abc123456789\nmodel: stealth/space-bunny-alpha")
+    assert len(ts) == 1
+    t = ts[0]
+    assert t.provider == Provider.openrouter
+    assert t.base_url == "https://openrouter.ai/api/v1"
+    assert t.model == "stealth/space-bunny-alpha"
+
+
+def test_openrouter_prose_mention_autofills():
+    ts = parse_paste("openrouter\nsk-or-v1-xyz987654321\ngpt-4o-mini")
+    assert len(ts) == 1
+    assert ts[0].provider == Provider.openrouter
+    assert ts[0].base_url == "https://openrouter.ai/api/v1"
+
+
+def test_openrouter_url_keeps_existing_base():
+    ts = parse_paste(
+        "base_url: https://openrouter.ai/api/v1\n"
+        "api_key: sk-or-v1-keepme00000001\n"
+        "model: anthropic/claude-3.5-sonnet"
+    )
+    assert len(ts) == 1
+    assert ts[0].provider == Provider.openrouter
+    assert ts[0].base_url == "https://openrouter.ai/api/v1"
+    # 经 OpenRouter 走 OpenAI 兼容协议，不因 claude 误判 anthropic 直连
+    assert ts[0].model.startswith("anthropic/")
+
+
+def test_anthropic_direct_not_overridden_by_openrouter_prose():
+    """官方 Anthropic 直连地址不因正文提 openrouter 被改写。"""
+    ts = parse_paste(
+        "openrouter can use claude too\n"
+        "base_url: https://api.anthropic.com\n"
+        "api_key: sk-ant-api03-direct000001\n"
+        "model: claude-3-5-sonnet-20241022"
+    )
+    assert len(ts) == 1
+    assert ts[0].provider == Provider.anthropic
+    assert ts[0].base_url == "https://api.anthropic.com"
+
+
+def test_openrouter_prose_with_other_base_url():
+    """正文提 openrouter + 其他中转地址（非 Anthropic 官方）→ 整批归 openrouter，URL 保留。"""
+    ts = parse_paste(
+        "please use openrouter for this\n"
+        "base_url: https://relay.example.com/v1\n"
+        "api_key: sk-relay-abcdef123456\n"
+        "model: gpt-4o"
+    )
+    assert len(ts) == 1
+    assert ts[0].provider == Provider.openrouter
+    assert ts[0].base_url == "https://relay.example.com/v1"
+
+
+def test_openrouter_prose_without_url_and_non_or_key():
+    """仅正文提 openrouter：无地址、密钥非 sk-or → provider=openrouter 并补默认 base。"""
+    ts = parse_paste("use openrouter\nmodel: gpt-4o-mini\napi_key: sk-plain-xyz000001")
+    assert len(ts) == 1
+    assert ts[0].provider == Provider.openrouter
+    assert ts[0].base_url == "https://openrouter.ai/api/v1"
 
 
 def test_garbage_returns_empty():
@@ -208,9 +277,11 @@ def test_multiple_models_only():
 
 def test_channel_lines_then_extra_model():
     """两行渠道 + 末尾单独一行模型：末尾模型归到上一个渠道。"""
-    text = ("https://a.example.com  sk-aaaa123456789  gpt-4o\n"
-            "https://b.example.com  sk-bbbb123456789  claude-3-5-sonnet\n"
-            "gpt-4o-mini")
+    text = (
+        "https://a.example.com  sk-aaaa123456789  gpt-4o\n"
+        "https://b.example.com  sk-bbbb123456789  claude-3-5-sonnet\n"
+        "gpt-4o-mini"
+    )
     ts = parse_paste(text)
     assert len(ts) == 3, _sig(ts)
     assert (ts[2].base_url, ts[2].model) == ("https://b.example.com", "gpt-4o-mini")
@@ -218,8 +289,10 @@ def test_channel_lines_then_extra_model():
 
 def test_labeled_url_not_split():
     """base_url: https://… 这种带标签的行不能被当成新渠道切开。"""
-    text = ("base_url: https://a.com\napi_key: sk-aaa123456789\nmodel: gpt-4o\n"
-            "base_url: https://b.com\napi_key: sk-bbb123456789\nmodel: qwen-max")
+    text = (
+        "base_url: https://a.com\napi_key: sk-aaa123456789\nmodel: gpt-4o\n"
+        "base_url: https://b.com\napi_key: sk-bbb123456789\nmodel: qwen-max"
+    )
     ts = parse_paste(text)
     assert len(ts) == 2, _sig(ts)
     assert [t.base_url for t in ts] == ["https://a.com", "https://b.com"]
@@ -227,8 +300,10 @@ def test_labeled_url_not_split():
 
 def test_names_never_duplicate():
     """同 host 同模型的两个入口，显示名必须可区分。"""
-    text = ("https://h.com/v1  sk-1aaaa1234567890  gpt-4o\n"
-            "https://h.com/v2  sk-2bbbb1234567890  gpt-4o")
+    text = (
+        "https://h.com/v1  sk-1aaaa1234567890  gpt-4o\n"
+        "https://h.com/v2  sk-2bbbb1234567890  gpt-4o"
+    )
     ts = parse_paste(text)
     assert len(ts) == 2
     assert len({t.name for t in ts}) == 2, [t.name for t in ts]
@@ -241,6 +316,8 @@ def test_url_path_not_treated_as_model():
 
 
 def test_hf_style_model_kept():
-    ts = parse_paste("https://api.silicon.com  sk-sil1234567890  Qwen/Qwen2.5-72B-Instruct")
+    ts = parse_paste(
+        "https://api.silicon.com  sk-sil1234567890  Qwen/Qwen2.5-72B-Instruct"
+    )
     assert len(ts) == 1
     assert ts[0].model == "Qwen/Qwen2.5-72B-Instruct"

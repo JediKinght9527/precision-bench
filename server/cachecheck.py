@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -31,10 +32,10 @@ from .store import _mask
 
 @dataclass
 class CacheCheckParams:
-    rounds: int = 6                  # 总轮数：第 1 轮写入（miss），其余应命中
-    prefix_tokens: int = 2048        # 前缀长度；OpenAI 门槛 1024、Anthropic 依模型 2048+
-    speedup_threshold: float = 1.5   # 加速比 ≥ 此值才算「缓存有效」
-    max_tokens: int = 512            # 思考型模型会先耗预算，太小会导致空输出
+    rounds: int = 6  # 总轮数：第 1 轮写入（miss），其余应命中
+    prefix_tokens: int = 2048  # 前缀长度；OpenAI 门槛 1024、Anthropic 依模型 2048+
+    speedup_threshold: float = 1.5  # 加速比 ≥ 此值才算「缓存有效」
+    max_tokens: int = 512  # 思考型模型会先耗预算，太小会导致空输出
     stream: bool = True
     timeout_s: float = 60.0
     proxy: str | None = None
@@ -63,6 +64,7 @@ def _round_dict(seq: int, res: providers.RequestResult) -> dict:
         "e2e_ms": _rd(res.e2e_ms),
         "cached_tokens": res.cached_tokens,
         "cache_write_tokens": res.cache_write_tokens,
+        "cache_reported": res.cache_reported,
         "in_tokens": res.in_tokens,
         "out_tokens": res.out_tokens,
         "error_class": res.error_class,
@@ -92,11 +94,10 @@ def _summarize(rounds: list[dict], p: CacheCheckParams) -> dict:
     """
     ok_rounds = [r for r in rounds if r["ok"]]
     reported = any(
-        r["cached_tokens"] > 0 or r["cache_write_tokens"] > 0 for r in ok_rounds
+        r.get("cache_reported") or r["cached_tokens"] > 0 or r["cache_write_tokens"] > 0
+        for r in ok_rounds
     )
-    hit = [
-        r for r in ok_rounds if r["cached_tokens"] > 0 and r["ttft_ms"] is not None
-    ]
+    hit = [r for r in ok_rounds if r["cached_tokens"] > 0 and r["ttft_ms"] is not None]
     miss = [
         r for r in ok_rounds if r["cached_tokens"] == 0 and r["ttft_ms"] is not None
     ]
@@ -105,8 +106,8 @@ def _summarize(rounds: list[dict], p: CacheCheckParams) -> dict:
     ttft_hit_med = _median([r["ttft_ms"] for r in hit])
     ttft_miss_min = min((r["ttft_ms"] for r in miss), default=None)
     ttft_hit_min = min((r["ttft_ms"] for r in hit), default=None)
-    speedup = None       # 中位口径（展示）
-    speedup_min = None   # min 口径（判定）
+    speedup = None  # 中位口径（展示）
+    speedup_min = None  # min 口径（判定）
     if ttft_miss_med and ttft_hit_med:
         speedup = round(ttft_miss_med / ttft_hit_med, 2)
     if ttft_miss_min and ttft_hit_min:
@@ -149,9 +150,11 @@ def _summarize(rounds: list[dict], p: CacheCheckParams) -> dict:
     # 各轮应与首轮一致，偏差大 = 中转截断/改写前缀
     if ok_rounds and reported and ok_rounds[0]["in_tokens"]:
         total0 = ok_rounds[0]["in_tokens"]
-        for r in hit:
+        for r in ok_rounds[1:]:
             if abs(r["in_tokens"] - total0) > total0 * 0.1:
-                notes.append("各轮输入 token 数不一致：前缀可能被中转截断或改写，缓存不可比")
+                notes.append(
+                    "各轮输入 token 数不一致：前缀可能被中转截断或改写，缓存不可比"
+                )
                 break
     if 0 < len(ok_rounds) < p.rounds:
         notes.append(f"仅 {len(ok_rounds)}/{p.rounds} 轮成功，结论仅作趋势参考")
@@ -173,15 +176,82 @@ def _summarize(rounds: list[dict], p: CacheCheckParams) -> dict:
     }
 
 
+@dataclass
+class CacheJob:
+    job_id: str
+    status: str = "running"
+    results: list[dict] | None = None
+    error: str | None = None
+    task: asyncio.Task | None = None
+
+
 class CacheCheckManager:
     """同步执行：单渠道 rounds × (TTFT+输出) 通常 2–10s，无需 SSE。"""
 
     def __init__(self, store):
         self.store = store
+        self._jobs: dict[str, CacheJob] = {}
 
-    async def run(
-        self, targets: list[Target], p: CacheCheckParams
-    ) -> list[dict]:
+    async def start(self, targets: list[Target], p: CacheCheckParams) -> str:
+        p = p.sanitized()
+        job_id = "cache_job_" + uuid.uuid4().hex[:12]
+        job = CacheJob(job_id=job_id)
+        self._jobs[job_id] = job
+        self._prune_jobs()
+        job.task = asyncio.create_task(self._run_job(job, targets, p))
+        return job_id
+
+    def get_job(self, job_id: str) -> dict | None:
+        job = self._jobs.get(job_id)
+        if not job:
+            return None
+        return {
+            "job_id": job.job_id,
+            "status": job.status,
+            "results": job.results,
+            "error": job.error,
+        }
+
+    def cancel(self, job_id: str) -> bool:
+        job = self._jobs.get(job_id)
+        if not job or job.status not in {"running", "cancelling"} or not job.task:
+            return False
+        job.status = "cancelling"
+        job.task.cancel()
+        return True
+
+    async def shutdown(self) -> None:
+        tasks = []
+        for job in self._jobs.values():
+            if job.task and not job.task.done():
+                job.status = "cancelling"
+                job.task.cancel()
+                tasks.append(job.task)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _prune_jobs(self) -> None:
+        if len(self._jobs) < 32:
+            return
+        for job_id, job in list(self._jobs.items()):
+            if job.task and job.task.done():
+                self._jobs.pop(job_id, None)
+                if len(self._jobs) < 32:
+                    return
+
+    async def _run_job(
+        self, job: CacheJob, targets: list[Target], p: CacheCheckParams
+    ) -> None:
+        try:
+            job.results = await self.run(targets, p)
+            job.status = "done"
+        except asyncio.CancelledError:
+            job.status = "cancelled"
+        except Exception as exc:  # noqa: BLE001
+            job.status = "error"
+            job.error = f"{type(exc).__name__}: {exc}"
+
+    async def run(self, targets: list[Target], p: CacheCheckParams) -> list[dict]:
         p = p.sanitized()
         out: list[dict] = []
         limits = httpx.Limits(max_connections=4, max_keepalive_connections=2)
@@ -250,7 +320,9 @@ class CacheCheckManager:
         )
         rounds: list[dict] = []
         for i in range(p.rounds):
-            res = await providers.execute(client, target, cfg, messages, in_hint)
+            res = await providers.execute(
+                client, target, cfg, messages, in_hint, timeout=cfg.timeout_s
+            )
             rounds.append(_round_dict(i + 1, res))
         summary = _summarize(rounds, p)
         record = {

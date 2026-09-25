@@ -1,6 +1,6 @@
 from server.metrics import summarize
 from server.schemas import SampleRecord, SLO
-from server.stats import percentiles
+from server.stats import lttb, percentiles
 
 
 def test_percentiles():
@@ -9,6 +9,17 @@ def test_percentiles():
     assert 49 <= p[50] <= 51
     assert 89 <= p[90] <= 92
     assert p[99] >= 98
+
+
+def test_lttb_preserves_endpoints_without_duplicates():
+    x = [float(i) for i in range(10)]
+    y = [0.0, 1.0, 0.0, 8.0, 0.0, 0.0, 7.0, 0.0, 1.0, 0.0]
+    for n in (3, 5):
+        sx, sy = lttb(x, y, n)
+        assert len(sx) == n
+        assert len(set(sx)) == n
+        assert sx[0] == 0 and sx[-1] == 9
+        assert len(sy) == n
 
 
 def test_summary_goodput():
@@ -39,15 +50,48 @@ def test_summary_goodput():
     assert s["errors"]["rate_limit"] == 2
 
 
+def test_rps_uses_completed_requests():
+    samples = [
+        SampleRecord(run_id="r", target="t", seq=i, ts=1000 + i, ok=i < 2)
+        for i in range(4)
+    ]
+    summary = summarize(samples, SLO(), wall_s=2.0)
+    assert summary["rps"] == 1.0
+    assert summary["attempted_rps"] == 2.0
+
+
 def test_goodput_requires_all_three():
     """Goodput 必须三项（首字/逐token/端到端）同时达标。"""
     from server.schemas import SLO as S
+
     samples = [
-        SampleRecord(run_id="r", target="t", seq=0, ts=1, ttft_ms=100, tpot_ms=20, e2e_ms=900, ok=True),
-        SampleRecord(run_id="r", target="t", seq=1, ts=2, ttft_ms=100, tpot_ms=20, e2e_ms=9000, ok=True),  # 端到端超标
+        SampleRecord(
+            run_id="r",
+            target="t",
+            seq=0,
+            ts=1,
+            ttft_ms=100,
+            tpot_ms=20,
+            e2e_ms=900,
+            ok=True,
+        ),
+        SampleRecord(
+            run_id="r",
+            target="t",
+            seq=1,
+            ts=2,
+            ttft_ms=100,
+            tpot_ms=20,
+            e2e_ms=9000,
+            ok=True,
+        ),  # 端到端超标
     ]
-    assert summarize(samples, S(ttft_ms=1500, tpot_ms=50, e2e_ms=5000))["goodput"] == 0.5
-    assert summarize(samples, S(ttft_ms=1500, tpot_ms=50, e2e_ms=10000))["goodput"] == 1.0
+    assert (
+        summarize(samples, S(ttft_ms=1500, tpot_ms=50, e2e_ms=5000))["goodput"] == 0.5
+    )
+    assert (
+        summarize(samples, S(ttft_ms=1500, tpot_ms=50, e2e_ms=10000))["goodput"] == 1.0
+    )
 
 
 def test_cache_metrics_and_cost():
@@ -55,14 +99,26 @@ def test_cache_metrics_and_cost():
     from server.schemas import SLO as S
 
     def mk(n, cached, ttft):
-        return [SampleRecord(run_id="r", target="t", seq=i, ts=1000 + i,
-                             ttft_ms=ttft, e2e_ms=900, tpot_ms=20,
-                             out_tokens=10, in_tokens=200, cached_tokens=cached, ok=True)
-                for i in range(n)]
+        return [
+            SampleRecord(
+                run_id="r",
+                target="t",
+                seq=i,
+                ts=1000 + i,
+                ttft_ms=ttft,
+                e2e_ms=900,
+                tpot_ms=20,
+                out_tokens=10,
+                in_tokens=200,
+                cached_tokens=cached,
+                ok=True,
+            )
+            for i in range(n)
+        ]
 
     r = summarize(mk(5, 150, 120) + mk(5, 0, 300), S(), 1.0, 2.0, 0.1)
     c = r["cache"]
-    assert abs(c["hit_rate"] - 0.375) < 1e-6          # 750 / 2000
+    assert abs(c["hit_rate"] - 0.375) < 1e-6  # 750 / 2000
     assert c["cached_tokens"] == 750
     assert c["requests_hit"] == 5 and c["requests_miss"] == 5
     assert c["ttft_hit"]["mean"] == 120 and c["ttft_miss"]["mean"] == 300
@@ -72,24 +128,99 @@ def test_cache_metrics_and_cost():
     assert abs(r["cost"]["total"] - want) < 1e-6
 
 
+def test_cache_write_has_separate_price():
+    sample = SampleRecord(
+        run_id="r",
+        target="t",
+        seq=0,
+        ts=1000,
+        ttft_ms=100,
+        e2e_ms=200,
+        tpot_ms=20,
+        out_tokens=10,
+        in_tokens=200,
+        cache_write_tokens=200,
+        cache_reported=True,
+        ok=True,
+    )
+    summary = summarize([sample], SLO(), 1.0, 2.0, 0.1, 0.2)
+    assert summary["cost"]["total"] == 0.00006
+
+
 def test_no_cache_reports_zero():
     from server.schemas import SLO as S
-    r = summarize([SampleRecord(run_id="r", target="t", seq=0, ts=1, ttft_ms=100,
-                                e2e_ms=200, tpot_ms=20, out_tokens=5, in_tokens=50, ok=True)], S())
+
+    r = summarize(
+        [
+            SampleRecord(
+                run_id="r",
+                target="t",
+                seq=0,
+                ts=1,
+                ttft_ms=100,
+                e2e_ms=200,
+                tpot_ms=20,
+                out_tokens=5,
+                in_tokens=50,
+                ok=True,
+            )
+        ],
+        S(),
+    )
     assert r["cache"]["hit_rate"] == 0.0
     assert r["cache"]["ttft_speedup"] is None
+    assert r["cache"]["reported"] is False  # 无字段上报 → 区分「未上报」vs「命中 0」
+
+
+def test_cache_reported_true_when_flag_set():
+    """渠道上报了缓存字段但本轮命中为 0：reported=True 且 hit_rate=0。"""
+    from server.schemas import SLO as S
+
+    samples = [
+        SampleRecord(
+            run_id="r",
+            target="t",
+            seq=i,
+            ts=1000 + i,
+            ttft_ms=120,
+            e2e_ms=900,
+            tpot_ms=20,
+            out_tokens=10,
+            in_tokens=200,
+            cached_tokens=0,
+            cache_reported=True,
+            ok=True,
+        )
+        for i in range(3)
+    ]
+    c = summarize(samples, S())["cache"]
+    assert c["reported"] is True
+    assert c["hit_rate"] == 0.0
+    assert c["requests_hit"] == 0 and c["requests_miss"] == 3
 
 
 def test_goodput_without_tpot():
     """非流式测不到 TPOT，健康渠道不能被误判为 0% Goodput。"""
     from server.schemas import SLO as S
-    samples = [SampleRecord(run_id="r", target="t", seq=i, ts=1000 + i,
-                            ttft_ms=100, e2e_ms=900, tpot_ms=None, out_tokens=10, ok=True)
-               for i in range(4)]
+
+    samples = [
+        SampleRecord(
+            run_id="r",
+            target="t",
+            seq=i,
+            ts=1000 + i,
+            ttft_ms=100,
+            e2e_ms=900,
+            tpot_ms=None,
+            out_tokens=10,
+            ok=True,
+        )
+        for i in range(4)
+    ]
     r = summarize(samples, S(ttft_ms=1500, tpot_ms=50, e2e_ms=5000))
     assert r["goodput"] == 1.0
     assert r["measurable"]["tpot"] is False
-    assert r["tpot"]["mean"] is None      # 不能显示 0.0
+    assert r["tpot"]["mean"] is None  # 不能显示 0.0
     assert r["itl"]["p99"] is None
 
 
@@ -97,9 +228,35 @@ def test_summary_checks():
     """内容级 checks（对齐 k6）：ok 但 0 输出 token 记为空输出（假成功）。"""
     slo = SLO(ttft_ms=1500, tpot_ms=50)
     samples = [
-        SampleRecord(run_id="r", target="t", seq=0, ts=1, ttft_ms=100, e2e_ms=500, out_tokens=10, ok=True),
-        SampleRecord(run_id="r", target="t", seq=1, ts=2, ttft_ms=100, e2e_ms=500, out_tokens=0, ok=True),
-        SampleRecord(run_id="r", target="t", seq=2, ts=3, out_tokens=0, ok=False, error_class="timeout"),
+        SampleRecord(
+            run_id="r",
+            target="t",
+            seq=0,
+            ts=1,
+            ttft_ms=100,
+            e2e_ms=500,
+            out_tokens=10,
+            ok=True,
+        ),
+        SampleRecord(
+            run_id="r",
+            target="t",
+            seq=1,
+            ts=2,
+            ttft_ms=100,
+            e2e_ms=500,
+            out_tokens=0,
+            ok=True,
+        ),
+        SampleRecord(
+            run_id="r",
+            target="t",
+            seq=2,
+            ts=3,
+            out_tokens=0,
+            ok=False,
+            error_class="timeout",
+        ),
     ]
     s = summarize(samples, slo)
     assert s["checks"]["empty_output"] == 1

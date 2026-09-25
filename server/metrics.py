@@ -14,6 +14,8 @@ def summarize(
     price_in: float = 0.0,
     price_out: float = 0.0,
     price_cache_in: float = 0.0,
+    price_cache_write: float = 0.0,
+    wall_s: float | None = None,
 ) -> dict:
     total = len(samples)
     ok_samples = [s for s in samples if s.ok]
@@ -39,7 +41,14 @@ def summarize(
     hit_mean, _ = mean_std(hit_ttft)
     miss_mean, _ = mean_std(miss_ttft)
     cost_total, _ = _cost(
-        in_tok, cached_tok, out_tok, price_in, price_out, price_cache_in
+        in_tok,
+        cached_tok,
+        cache_write_tok,
+        out_tok,
+        price_in,
+        price_out,
+        price_cache_in,
+        price_cache_write,
     )
 
     # Goodput：TTFT 与 E2EL 必须达标；TPOT 仅在可测时参与。
@@ -80,13 +89,14 @@ def summarize(
         else None
     )
 
-    wall = 0.0
+    wall = float(wall_s) if wall_s is not None else 0.0
     ts = [s.ts for s in samples]
-    if len(ts) >= 2:
+    if wall_s is None and len(ts) >= 2:
         wall = max(ts) - min(ts)
-    # 采样时长不足 1 秒时，总请求数/墙钟 会得出几千 req/s 的荒谬值 —— 判为不可计算
-    rps = round(total / wall, 3) if wall >= 1.0 else None
-    # vLLM 口径的 goodput 是"每秒达标请求数"，与占比口径一并给出
+    # 采样时长不足 1 秒时，速率指标会得出荒谬值，判为不可计算
+    attempted_rps = round(total / wall, 3) if wall >= 1.0 else None
+    rps = round(ok / wall, 3) if wall >= 1.0 else None
+    # vLLM 口径的 goodput 是“每秒达标请求数”，与占比口径一并给出
     request_goodput = round(good / wall, 3) if wall >= 1.0 else None
 
     errors: dict[str, int] = {}
@@ -107,6 +117,7 @@ def summarize(
         "goodput": round(goodput, 4),
         "request_goodput": request_goodput,
         "rps": rps,
+        "attempted_rps": attempted_rps,
         "wall_s": round(wall, 3),
         "checks": {
             "empty_output": empty_out,
@@ -155,12 +166,17 @@ def summarize(
             "price_in": price_in,
             "price_out": price_out,
             "price_cache_in": price_cache_in or price_in,
+            "price_cache_write": price_cache_write or price_in,
             "currency": "CNY",
         },
         "cache": {
             "cached_tokens": cached_tok,
             "write_tokens": cache_write_tok,
             "hit_rate": _r(cached_tok / in_tok, 4) if in_tok else 0.0,
+            "reported": any(
+                getattr(s, "cache_reported", False) or s.cached_tokens > 0
+                for s in samples
+            ),
             "requests_hit": len(hit),
             "requests_miss": len(miss),
             "ttft_hit": {
@@ -193,20 +209,21 @@ def summarize(
 def _cost(
     in_tok: int,
     cached_tok: int,
+    cache_write_tok: int,
     out_tok: int,
     price_in: float,
     price_out: float,
     price_cache_in: float,
+    price_cache_write: float,
 ) -> tuple[float, float]:
-    """成本：命中的输入按缓存单价算，其余按原价。
-
-    近似口径：Anthropic 的 cache_creation 计正常输入价，DeepSeek 的 miss 不算写入。
-    """
+    """成本：命中、写入和普通输入分别计价。"""
     cache_price = price_cache_in or price_in
-    uncached = max(0, in_tok - cached_tok)
+    write_price = price_cache_write or price_in
+    uncached = max(0, in_tok - cached_tok - cache_write_tok)
     total = (
         uncached / 1e6 * price_in
         + cached_tok / 1e6 * cache_price
+        + cache_write_tok / 1e6 * write_price
         + out_tok / 1e6 * price_out
     )
     return round(total, 6), total
