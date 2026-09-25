@@ -1,7 +1,10 @@
 [project]
 name = "llm-bench"
 version = "0.3.0"
-description = "第三方 LLM 中转 API 性能与稳定性测试平台（OpenAI 兼容 + Anthropic）"
+description = "Evidence-first performance, cache, and quality verification for LLM relay APIs"
+readme = "README.md"
+license = { file = "LICENSE" }
+keywords = ["llm", "benchmark", "prompt-cache", "relay-api", "observability", "slo"]
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",

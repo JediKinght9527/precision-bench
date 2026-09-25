@@ -6,6 +6,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -29,3 +32,24 @@ jobs:
 
       - name: Run tests with coverage
         run: uv run --frozen pytest
+
+      - name: Compile Python sources
+        run: uv run --frozen python -m compileall -q server tests
+
+      - name: Check frontend syntax
+        run: |
+          for file in web/*.js; do node --check "$file"; done
+
+      - name: Check whitespace
+        run: git diff --check
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose file
+        run: docker compose config -q
+
+      - name: Build Docker image
+        run: docker build -t precision-bench:ci .
