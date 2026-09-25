@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a reproducible problem
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not include API keys, real prompts, or private endpoint URLs.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: 0.3.0 or latest commit
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Performance run
+        - Cache detection
+        - Quality / degradation check
+        - Web UI
+        - Scheduler / alerts
+        - Installation
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Minimal steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Sanitized logs, metric names, or screenshots

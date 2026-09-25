@@ -1,0 +1,34 @@
+name: Feature request
+description: Suggest a focused product improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow or decision is currently hard?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed outcome
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - Performance and metrics
+        - Cache verification
+        - Quality / degradation detection
+        - Reports and collaboration
+        - China mainland channels
+        - Developer experience
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or trade-offs

@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+title: LLM Bench
+message: Evidence-first performance, cache, and quality verification for LLM relay APIs.
+type: software
+version: 0.3.0
+date-released: 2026-09-25
+license: MIT
+authors:
+  - name: LLM Bench contributors
+keywords:
+  - large language models
+  - API benchmarking
+  - prompt caching
+  - reliability engineering
