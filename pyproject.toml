@@ -1,7 +1,7 @@
 [project]
 name = "llm-bench"
 version = "0.3.0"
-description = "Evidence-first performance, cache, and quality verification for LLM relay APIs"
+description = "Load testing, cache verification, and degradation detection for LLM relay APIs"
 readme = "README.md"
 license = { file = "LICENSE" }
 keywords = ["llm", "benchmark", "prompt-cache", "relay-api", "observability", "slo"]

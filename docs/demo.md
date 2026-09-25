@@ -35,7 +35,3 @@ Open **Cache detection**, choose a provider-compatible prefix length, and run th
 ## 5. Generate the verification report
 
 Click **生成验真报告** above the performance summary. The report combines the current performance run with the latest matching cache and quality records, then exports as Markdown.
-
-## Recording a product demo
-
-For a public demo, use the local mock upstream or a provider test account with a fixed, non-sensitive prompt. Show the run timeline, cache verdict, quality verdict, and generated report. Do not record real API keys or private endpoint URLs.

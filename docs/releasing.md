@@ -30,5 +30,3 @@ curl -fsS http://127.0.0.1:8787/api/health
 - Add release notes with the migration and compatibility notes.
 - Link the English README, Chinese README, demo, security policy, and changelog.
 - Confirm CI passed on the release commit.
-
-No commit or push is performed by this checklist.

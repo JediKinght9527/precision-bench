@@ -6,8 +6,8 @@
 
 ### Added
 
-- GitHub 发布整备：英文主 README、中文 `README.zh-CN.md`、品牌 Logo、PR 模板、行为准则、CODEOWNERS。
-- Docker 一键运行：多阶段 `Dockerfile`（非 root、具名卷持久化）、`docker-compose.yml`、CI 镜像构建校验。
+- 新增英文 README、中文 `README.zh-CN.md` 与品牌 Logo，补充许可证、贡献指南、PR 模板等基础文件。
+- 支持 Docker 运行：多阶段 `Dockerfile`（非 root、数据落在具名卷）、`docker-compose.yml`，CI 增加镜像构建。
 - 渠道验真报告：汇总性能、缓存、降智、SLO 和成本证据，可复制/下载 Markdown。
 - 本地测试方案保存与载入，不保存 API key。
 - 缓存友好模式：固定前缀、至少一次预热，让正式采样有机会从首轮命中缓存。

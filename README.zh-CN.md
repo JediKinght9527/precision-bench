@@ -16,6 +16,8 @@
   <a href="README.md">English</a> · <b>简体中文</b> · <a href="docs/demo.md">Demo</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="CHANGELOG.md">Changelog</a> · <a href="SECURITY.md">Security</a>
 </p>
 
+<img src="docs/assets/dashboard.png" alt="Precision Bench 仪表盘" width="100%">
+
 第三方 **LLM 中转 API** 性能、稳定性与质量检定平台。粘贴供应商给的 `base_url + api_key + model` 即可测，输出可复算的原始指标、波形、性能判定、缓存验证与降智检测结果。
 
 - 协议：**OpenAI 兼容** + **Anthropic Messages** + **OpenRouter**（聚合网关，OpenAI 兼容；粘贴 `sk-or-…` 或正文含 openrouter 自动识别并补 `https://openrouter.ai/api/v1`）
@@ -23,8 +25,6 @@
 - 模式：并发（closed-loop）/ 定频（open-loop，**含 coordinated omission 修正**）/ 时长（长时稳定性）
 - 批量：多个供应商一键横评叠加；定时巡检 + Webhook/飞书告警
 - 存储：SQLite（WAL），长跑持久化、断线可恢复
-
-![Precision Bench 产品预览](docs/assets/llm-bench-preview.svg)
 
 [快速开始](#快速开始) · [功能一览](#功能一览) · [指标口径](#指标口径ui-内亦可复算) · [API](#api) · [测试](#测试) · [发布清单](docs/releasing.md)
 
