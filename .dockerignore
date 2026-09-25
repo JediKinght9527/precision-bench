@@ -1,0 +1,15 @@
+# 构建上下文白名单：密钥/数据库/本地产物一律不进镜像
+.git
+.github
+.venv
+.shots
+.pytest_cache
+.coverage
+.python-version
+.pyrightconfig.json
+data
+docs
+tests
+*.log
+Dockerfile
+docker-compose.yml
