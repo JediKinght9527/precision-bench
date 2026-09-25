@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -21,6 +22,7 @@ class BenchState:
     target: Target
     opts: dict[str, Any]
     status: str = "pending"
+    stop_requested: bool = False
     items: list[dict] = field(default_factory=list)
     results: list[dict] = field(default_factory=list)
     dims_done: dict[str, list[int]] = field(default_factory=dict)
@@ -35,6 +37,8 @@ class BenchState:
     started_at: float | None = None
     ended_at: float | None = None
     task: asyncio.Task | None = None
+    event_seq: int = 0
+    events: deque = field(default_factory=lambda: deque(maxlen=2000))
 
 
 KEEP_FINISHED = 40
@@ -49,8 +53,11 @@ class BenchManager:
         self.runs.pop(rid, None)
 
     def _evict(self) -> None:
-        done = [(rid, st) for rid, st in self.runs.items()
-                if st.status in ("done", "error", "stopped")]
+        done = [
+            (rid, st)
+            for rid, st in self.runs.items()
+            if st.status in ("done", "error", "stopped")
+        ]
         if len(done) <= KEEP_FINISHED:
             return
         for rid, _ in sorted(done, key=lambda kv: kv[1].ended_at or 0)[:-KEEP_FINISHED]:
@@ -64,12 +71,17 @@ class BenchManager:
         if engine == "lm_eval":
             from . import lm_eval_runner as L
 
-            dims = [d for d in (opts.get("dims") or L.DEFAULT_TASKS) if d in L.TASKS]
+            dims = [
+                d
+                for d in (opts.get("dims") or L.DEFAULT_TASKS)
+                if d in L.TASKS and not L.TASKS[d].get("logprobs")
+            ]
             if not dims:
                 raise ValueError("没有可用的官方任务")
             # 官方任务的 limit 是"每个叶子任务"生效（MMLU 有 57 个），必须如实告知
             leaves = sum(L.TASKS[d].get("leaves", 1) for d in dims)
-            n_items = leaves * int(opts.get("limit", 200))
+            limit = int(opts.get("limit", 200))
+            n_items = leaves * limit if limit > 0 else 0
             items: list[dict] = []
         else:
             dims = opts.get("dims") or list(bench_data.DIMENSIONS.keys())
@@ -79,26 +91,75 @@ class BenchManager:
         ids = []
         for t in targets:
             rid = uuid.uuid4().hex[:12]
-            st = BenchState(run_id=rid, target=t, opts={**opts, "dims": dims, "engine": engine}, items=items)
+            st = BenchState(
+                run_id=rid,
+                target=t,
+                opts={**opts, "dims": dims, "engine": engine, "base_url": t.base_url},
+                items=items,
+            )
             self.runs[rid] = st
-            await self.store.create_bench_run(rid, t, {**opts, "engine": engine}, n_items)
+            await self.store.create_bench_run(
+                rid, t, {**opts, "dims": dims, "engine": engine}, n_items
+            )
             st.task = asyncio.create_task(self._drive(st))
             ids.append(rid)
+        await asyncio.sleep(0)
         return ids
 
     def stop(self, rid: str) -> bool:
         st = self.runs.get(rid)
-        if not st:
+        if not st or st.status in ("done", "error", "stopped"):
             return False
+        if st.stop_requested:
+            return True
+        st.stop_requested = True
         st.status = "stopping"
         if st.task:
             st.task.cancel()
         return True
 
+    async def stop_and_wait(self, rid: str) -> bool:
+        st = self.runs.get(rid)
+        if not st:
+            return True
+        if st.status in ("done", "error", "stopped"):
+            return True
+        self.stop(rid)
+        if st.task and not st.task.done():
+            _, pending = await asyncio.wait({st.task}, timeout=5)
+            if pending:
+                return False
+        return True
+
+    async def shutdown(self) -> None:
+        active = [
+            st
+            for st in self.runs.values()
+            if st.status not in ("done", "error", "stopped")
+        ]
+        for st in active:
+            st.stop_requested = True
+            st.status = "stopping"
+            if st.task and not st.task.done():
+                st.task.cancel()
+        tasks = [st.task for st in active if st.task and not st.task.done()]
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=5)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+
     def subscribe(self, rid: str) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=2000)
         self.runs[rid].subscribers.add(q)
         return q
+
+    def replay_since(self, rid: str, after_id: int) -> list[dict]:
+        st = self.runs.get(rid)
+        if not st:
+            return []
+        return [event for event in st.events if event.get("id", 0) > after_id]
 
     def unsubscribe(self, rid: str, q: asyncio.Queue) -> None:
         st = self.runs.get(rid)
@@ -106,7 +167,25 @@ class BenchManager:
             st.subscribers.discard(q)
 
     def _emit(self, st: BenchState, event: dict) -> None:
+        st.event_seq += 1
+        event = {**event, "id": st.event_seq}
+        st.events.append(event)
+        reliable = event.get("type") in {"summary", "status", "error"}
         for q in list(st.subscribers):
+            if q.full():
+                try:
+                    q.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                if not reliable:
+                    try:
+                        q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        q.put_nowait({"type": "reset"})
+                    except asyncio.QueueFull:
+                        pass
             try:
                 q.put_nowait(event)
             except asyncio.QueueFull:
@@ -129,9 +208,9 @@ class BenchManager:
         """分派：自建题集（curated）或官方数据集（lm_eval），收尾逻辑共用。"""
         st.status = "running"
         st.started_at = time.time()
-        await self.store.set_bench_status(st.run_id, "running")
-        self._emit(st, {"type": "status", "status": "running"})
         try:
+            await self.store.set_bench_status(st.run_id, "running")
+            self._emit(st, {"type": "status", "status": "running"})
             if st.opts.get("engine") == "lm_eval":
                 await self._run_lm_eval(st)
             else:
@@ -141,10 +220,21 @@ class BenchManager:
         except Exception as exc:  # noqa: BLE001
             import logging
 
-            logging.getLogger("llmbench.bench").exception("bench %s 失败: %s", st.run_id, exc)
+            logging.getLogger("llmbench.bench").exception(
+                "bench %s 失败: %s", st.run_id, exc
+            )
             st.status = "error"
             self._emit(st, {"type": "error", "message": str(exc)})
-        await self._finish(st)
+        try:
+            await self._finish(st)
+        except Exception as exc:  # noqa: BLE001
+            st.status = "error"
+            try:
+                await self.store.set_bench_status(st.run_id, st.status)
+            except Exception:
+                pass
+            self._emit(st, {"type": "error", "message": str(exc)})
+            self._emit(st, {"type": "status", "status": st.status})
 
     async def _run_curated(self, st: BenchState) -> None:
         from .schemas import RunConfig, TrafficConfig
@@ -166,6 +256,7 @@ class BenchManager:
         )
         max_tokens = int(opts.get("max_tokens", 512))
         client = self._client(opts)
+        transport_errors = 0
         try:
             total = len(st.items)
             for i, item in enumerate(st.items):
@@ -173,11 +264,21 @@ class BenchManager:
                     break
                 messages = [{"role": "user", "content": item["q"]}]
                 cfg.traffic.max_tokens = max_tokens
-                res = await providers.execute(client, st.target, cfg, messages, 1)
+                res = await providers.execute(
+                    client, st.target, cfg, messages, 1, timeout=cfg.timeout_s
+                )
+                if res.ok and not (res.text or "").strip():
+                    res.ok = False
+                    res.error_class = "empty_response"
+                    res.error_msg = "上游返回 200，但没有有效文本"
                 if res.ok:
                     passed, detail = bench_data.grade(item["g"], res.text)
                 else:
-                    passed, detail = (False, f"{res.error_class}: {res.error_msg or ''}")
+                    transport_errors += 1
+                    passed, detail = (
+                        False,
+                        f"{res.error_class}: {res.error_msg or ''}",
+                    )
                 rec = {
                     "dim": item["dim"],
                     "item_id": item["id"],
@@ -185,17 +286,42 @@ class BenchManager:
                     "latency_ms": round(res.e2e_ms or 0, 1),
                     "detail": detail,
                     "got": (res.text or "")[:800],
-                    "expected": str(item["g"].get("answer") or item["g"].get("value") or "")[:120],
+                    "expected": str(
+                        item["g"].get("answer") or item["g"].get("value") or ""
+                    )[:120],
                     "error": None if res.ok else (res.error_class or "error"),
                 }
                 st.results.append(rec)
                 st.dims_done.setdefault(item["dim"], []).append(1 if passed else 0)
                 if item["dim"] in ("knowledge", "chinese", "math", "format", "code"):
                     st.fp_texts.append(res.text or "")
-                self._emit(st, {"type": "item", "data": {
-                    k: rec[k] for k in ("dim", "item_id", "passed", "latency_ms", "detail")}})
-                self._emit(st, {"type": "progress", "done": i + 1, "total": total,
-                                "ok": sum(r["passed"] for r in st.results)})
+                self._emit(
+                    st,
+                    {
+                        "type": "item",
+                        "data": {
+                            k: rec[k]
+                            for k in (
+                                "dim",
+                                "item_id",
+                                "passed",
+                                "latency_ms",
+                                "detail",
+                            )
+                        },
+                    },
+                )
+                self._emit(
+                    st,
+                    {
+                        "type": "progress",
+                        "done": i + 1,
+                        "total": total,
+                        "ok": sum(r["passed"] for r in st.results),
+                    },
+                )
+            if transport_errors:
+                raise RuntimeError(f"{transport_errors} 个请求传输失败，结果不计入基线")
         finally:
             await client.aclose()
 
@@ -204,7 +330,7 @@ class BenchManager:
         from . import lm_eval_runner as L
 
         if not L.available():
-            raise RuntimeError("未安装 lm-eval，请执行：uv add \"lm_eval[api]\"")
+            raise RuntimeError('未安装 lm-eval，请执行：uv add "lm_eval[api]"')
         tasks = [d for d in st.opts.get("dims", []) if d in L.TASKS]
         if not tasks:
             raise RuntimeError("没有可用的官方任务")
@@ -212,30 +338,62 @@ class BenchManager:
         def on_event(ev: dict) -> None:
             self._emit(st, ev)
             if ev.get("state") == "progress":
-                self._emit(st, {"type": "progress", "done": ev.get("percent", 0), "total": 100,
-                                "ok": sum(1 for r in st.results if r["passed"]), "task": ev.get("task")})
+                self._emit(
+                    st,
+                    {
+                        "type": "progress",
+                        "done": ev.get("percent", 0),
+                        "total": 100,
+                        "ok": sum(1 for r in st.results if r["passed"]),
+                        "task": ev.get("task"),
+                    },
+                )
 
         parsed = await L.run(
-            st.target, tasks, st.opts, st.run_id,
-            on_event, lambda: st.status == "stopping",
+            st.target,
+            tasks,
+            st.opts,
+            st.run_id,
+            on_event,
+            lambda: st.status == "stopping",
         )
 
         # 维度元信息（用于图表显示官方任务名，而不是自建维度的名字）
         st.dim_meta = parsed["dims"]
         for dim, d in parsed["dims"].items():
-            st.dims_done.setdefault(dim, []).extend([1] * d["passed"] + [0] * (d["n"] - d["passed"]))
+            st.dims_done.setdefault(dim, []).extend(
+                [1] * d["passed"] + [0] * (d["n"] - d["passed"])
+            )
         for it in parsed["items"]:
             rec = {**it, "latency_ms": 0.0}
             st.results.append(rec)
             if it["dim"] in ("knowledge", "chinese", "math", "format", "code"):
                 st.fp_texts.append(it.get("got") or "")
-            self._emit(st, {"type": "item", "data": {
-                "dim": rec["dim"], "item_id": rec["item_id"], "passed": rec["passed"],
-                "latency_ms": 0.0, "detail": rec.get("detail", "")}})
+            self._emit(
+                st,
+                {
+                    "type": "item",
+                    "data": {
+                        "dim": rec["dim"],
+                        "item_id": rec["item_id"],
+                        "passed": rec["passed"],
+                        "latency_ms": 0.0,
+                        "detail": rec.get("detail", ""),
+                    },
+                },
+            )
         st.lm_eval_meta = parsed.get("config")
         st.lm_eval_version = parsed.get("lm_eval_version")
-        self._emit(st, {"type": "progress", "done": len(st.results),
-                        "total": len(st.results), "ok": sum(1 for r in st.results if r["passed"])})
+        await self.store.set_bench_task_key(st.run_id, self._task_key(st))
+        self._emit(
+            st,
+            {
+                "type": "progress",
+                "done": len(st.results),
+                "total": len(st.results),
+                "ok": sum(1 for r in st.results if r["passed"]),
+            },
+        )
 
     async def _finish(self, st: BenchState) -> None:
         scores = self._score(st)
@@ -247,23 +405,57 @@ class BenchManager:
         scores["fingerprint"] = st.fingerprint
         if getattr(st, "lm_eval_meta", None):
             scores["lm_eval"] = st.lm_eval_meta
-            await self.store.update_bench_meta(st.run_id, {
-                "lm_eval_version": getattr(st, "lm_eval_version", None),
-                "fewshot": (st.lm_eval_meta or {}).get("fewshot"),
-            })
+            await self.store.update_bench_meta(
+                st.run_id,
+                {
+                    "lm_eval_version": getattr(st, "lm_eval_version", None),
+                    "fewshot": (st.lm_eval_meta or {}).get("fewshot"),
+                },
+            )
         await self.store.finish_bench_run(
-            st.run_id, scores, st.fingerprint,
-            [{"dim": r["dim"], "item_id": r["item_id"], "passed": r["passed"],
-              "latency_ms": r["latency_ms"], "detail": r["detail"],
-              "got": r["got"], "expected": r["expected"]} for r in st.results],
+            st.run_id,
+            scores,
+            st.fingerprint,
+            [
+                {
+                    "dim": r["dim"],
+                    "item_id": r["item_id"],
+                    "passed": r["passed"],
+                    "latency_ms": r["latency_ms"],
+                    "detail": r["detail"],
+                    "got": r["got"],
+                    "expected": r["expected"],
+                }
+                for r in st.results
+            ],
         )
-        if st.status not in ("error", "stopped"):
+        if comparison.get("verdict") == "baseline":
+            await self.store.set_baseline(
+                _mask(st.target.base_url),
+                st.target.model,
+                self._task_key(st),
+                st.run_id,
+                scores.get("total", 0.0),
+                st.fingerprint,
+            )
+        if st.stop_requested:
+            st.status = "stopped"
+        elif st.status not in ("error", "stopped"):
             st.status = "done"
         st.ended_at = time.time()
         self._evict()
         await self.store.set_bench_status(st.run_id, st.status)
-        self._emit(st, {"type": "summary", "data": {
-            **scores, "fingerprint": st.fingerprint, "comparison": comparison}})
+        self._emit(
+            st,
+            {
+                "type": "summary",
+                "data": {
+                    **scores,
+                    "fingerprint": st.fingerprint,
+                    "comparison": comparison,
+                },
+            },
+        )
         self._emit(st, {"type": "status", "status": st.status})
 
     def _score(self, st: BenchState) -> dict[str, Any]:
@@ -272,7 +464,7 @@ class BenchManager:
         dims: dict[str, dict[str, Any]] = {}
         for dim, arr in st.dims_done.items():
             meta = bench_data.DIMENSIONS.get(dim, {})
-            em = st.dim_meta.get(dim, {})          # 官方任务自带的元信息
+            em = st.dim_meta.get(dim, {})  # 官方任务自带的元信息
             passed, total = sum(arr), len(arr)
             _, lo, hi = wilson_ci(passed, total)
             dims[dim] = {
@@ -321,7 +513,22 @@ class BenchManager:
         """
         engine = st.opts.get("engine", "curated")
         dims = sorted(st.opts.get("dims", []))
-        return f"{engine}:" + ",".join(dims)
+        parts = [f"{engine}:" + ",".join(dims)]
+        if engine == "lm_eval":
+            parts.append(f"provider={st.target.provider.value}")
+        for key in (
+            "limit",
+            "fewshot",
+            "seed",
+            "max_tokens",
+            "temperature",
+            "needle_tokens",
+        ):
+            if key in st.opts:
+                parts.append(f"{key}={st.opts.get(key)}")
+        if st.lm_eval_version:
+            parts.append(f"lm_eval_version={st.lm_eval_version}")
+        return "|".join(parts)
 
     async def _baseline_items(self, run_id: str) -> dict[str, bool]:
         """取某次运行的逐题对错，用于配对检验。"""
@@ -333,6 +540,18 @@ class BenchManager:
     ) -> dict[str, Any]:
         from .stats_ext import evaluate
 
+        if (
+            st.stop_requested
+            or st.status in ("error", "stopped", "stopping")
+            or not st.results
+        ):
+            return {
+                "verdict": "error" if st.status == "error" else "stopped",
+                "task_key": self._task_key(st),
+                "note": "本次运行未形成有效基线"
+                if not st.results
+                else "异常运行不写入基线",
+            }
         alpha = float(st.opts.get("alpha", 0.05))
         min_delta = float(st.opts.get("min_delta", st.opts.get("threshold", 0.03)))
         task_key = self._task_key(st)
@@ -341,10 +560,6 @@ class BenchManager:
         base = await self.store.get_baseline(key_url, st.target.model, task_key)
 
         if not base or base["bench_run_id"] == st.run_id:
-            await self.store.set_baseline(
-                key_url, st.target.model, task_key,
-                st.run_id, scores.get("total", 0.0), st.fingerprint,
-            )
             return {
                 "verdict": "baseline",
                 "task_key": task_key,
@@ -358,7 +573,8 @@ class BenchManager:
         delta = round(scores.get("total", 0.0) - (base.get("total_score") or 0.0), 4)
         dim_deltas = {
             k: round(v["score"] - base_dims[k]["score"], 4)
-            for k, v in scores.get("dims", {}).items() if k in base_dims
+            for k, v in scores.get("dims", {}).items()
+            if k in base_dims
         }
 
         cur_items = {str(r["item_id"]): bool(r["passed"]) for r in st.results}
@@ -368,7 +584,8 @@ class BenchManager:
         flag_dims = [k for k, d in dim_deltas.items() if d <= -max(min_delta, 0.0)]
 
         fp_changed = bool(
-            st.fingerprint and base.get("fingerprint")
+            st.fingerprint
+            and base.get("fingerprint")
             and st.fingerprint != base["fingerprint"]
         )
         return {

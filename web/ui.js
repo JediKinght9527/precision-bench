@@ -11,20 +11,20 @@
   const _css = getComputedStyle(document.documentElement);
   const _v = (n, fb) => (_css.getPropertyValue(n) || fb).trim() || fb;
   const C = {
-    tx1: _v('--tx-1', '#ffffff'), tx2: _v('--tx-2', '#9b9b9b'), tx3: _v('--tx-3', '#6b6b6b'),
-    line: _v('--line', 'rgba(255,255,255,.08)'), line2: _v('--line-2', 'rgba(255,255,255,.12)'),
-    acc: _v('--acc', '#76b900'), acc2: _v('--acc-hi', '#8ad600'),
-    ok: _v('--ok', '#76b900'), warn: _v('--warn', '#ffb800'), bad: _v('--bad', '#ff4d4f'), info: _v('--info', '#4086f4'),
-    yellow: _v('--warn', '#ffb800'),
-    tr1: _v('--tr-1', '#76b900'), tr2: _v('--tr-2', '#8ad600'), tr3: _v('--tr-3', '#a3e635'),
-    tr4: _v('--tr-4', '#4d8a00'), tr5: _v('--tr-5', '#c6f96b'),
-    /* 绿系为主，语义色垫底防撞 */
+    tx1: _v('--tx-1', '#f0f2f5'), tx2: _v('--tx-2', '#9aa3b5'), tx3: _v('--tx-3', '#7f899d'),
+    line: _v('--line', 'rgba(148,163,184,.10)'), line2: _v('--line-2', 'rgba(148,163,184,.16)'),
+    acc: _v('--acc', '#f0b429'), acc2: _v('--acc-hi', '#ffc84d'),
+    ok: _v('--ok', '#34d399'), warn: _v('--warn', '#f59e0b'), bad: _v('--bad', '#f06464'), info: _v('--info', '#6aa5f7'),
+    yellow: _v('--warn', '#f59e0b'),
+    tr1: _v('--tr-1', '#f0b429'), tr2: _v('--tr-2', '#fcd34d'), tr3: _v('--tr-3', '#7395be'),
+    tr4: _v('--tr-4', '#b45309'), tr5: _v('--tr-5', '#9687c5'),
+    /* 琥珀主系列 + 冷色辅助，语义色垫底防撞 */
     series: [
-      _v('--tr-1', '#76b900'), _v('--tr-2', '#8ad600'), _v('--tr-3', '#a3e635'),
-      _v('--tr-4', '#4d8a00'), _v('--tr-5', '#c6f96b'),
-      _v('--bad', '#ff4d4f'), _v('--warn', '#ffb800'), _v('--info', '#4086f4'),
+      _v('--tr-1', '#f0b429'), _v('--tr-2', '#fcd34d'), _v('--tr-3', '#7395be'),
+      _v('--tr-4', '#b45309'), _v('--tr-5', '#9687c5'),
+      _v('--bad', '#f06464'), _v('--warn', '#f59e0b'), _v('--info', '#6aa5f7'),
     ],
-    bg0: _v('--bg-0', '#000000'), bg1: _v('--bg-1', '#0b0b0b'),
+    bg0: _v('--bg-0', '#0e1014'), bg1: _v('--bg-1', '#12151b'),
   };
 
   const $ = (id) => document.getElementById(id);
@@ -36,6 +36,23 @@
   };
   const fmt = (v, nd = 0) => (v == null || Number.isNaN(Number(v)) ? '–' : nf(nd).format(Number(v)));
   const pct = (v) => (v == null ? '–' : (v * 100).toFixed(1) + '%');
+  /* 毫秒自适应：≥1s 显示秒，否则按量级选小数位 —— 判定块/读数/表格共用 */
+  const fmtTimeParts = (ms) => {
+    if (ms == null || ms === '' || Number.isNaN(Number(ms))) return { v: '–', u: '' };
+    const n = Number(ms);
+    const a = Math.abs(n);
+    if (a >= 10000) return { v: nf(1).format(n / 1000), u: 's' };
+    if (a >= 1000) return { v: nf(2).format(n / 1000), u: 's' };
+    if (a >= 100) return { v: nf(0).format(n), u: 'ms' };
+    if (a >= 10) return { v: nf(1).format(n), u: 'ms' };
+    if (a >= 1) return { v: nf(2).format(n), u: 'ms' };
+    if (a === 0) return { v: '0', u: 'ms' };
+    return { v: nf(2).format(n), u: 'ms' };
+  };
+  const fmtTime = (ms) => {
+    const p = fmtTimeParts(ms);
+    return p.u ? `${p.v} ${p.u}` : p.v;
+  };
   const _tfHMS = new Intl.DateTimeFormat('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const _tfHM = new Intl.DateTimeFormat('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' });
   const _dtf = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -44,7 +61,7 @@
   const dtstr = (ts) => _dtf.format(new Date(ts * 1000));
   const nowTime = () => _tfHMS.format(new Date());
 
-  /* ---------- ECharts 主题 · NVIDIA ---------- */
+  /* ---------- ECharts 主题 · 精密检定台 ---------- */
   echarts.registerTheme('llmbench', {
     color: C.series,
     backgroundColor: 'transparent',
@@ -56,27 +73,27 @@
     },
     categoryAxis: {
       axisLine: { lineStyle: { color: C.line2 } }, axisTick: { show: false },
-      axisLabel: { color: C.tx3, fontSize: 11, fontFamily: 'ui-monospace, monospace' }, splitLine: { show: false },
+      axisLabel: { color: C.tx2, fontSize: 12, fontFamily: 'ui-monospace, monospace' }, splitLine: { show: false },
     },
     valueAxis: {
       axisLine: { show: false }, axisTick: { show: false },
-      axisLabel: { color: C.tx3, fontSize: 11, fontFamily: 'ui-monospace, monospace' },
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,.06)' } },
+      axisLabel: { color: C.tx2, fontSize: 12, fontFamily: 'ui-monospace, monospace' },
+      splitLine: { lineStyle: { color: 'rgba(148,163,184,.08)' } },
     },
     legend: { textStyle: { color: C.tx2, fontSize: 11 } },
     tooltip: {
-      backgroundColor: 'rgba(18,18,18,.96)',
-      borderColor: 'rgba(118,185,0,.4)',
+      backgroundColor: 'rgba(23,27,35,.97)',
+      borderColor: 'rgba(240,180,41,.35)',
       borderWidth: 1,
       textStyle: { color: C.tx1, fontSize: 12 },
       extraCssText: 'border-radius:6px;box-shadow:0 8px 28px rgba(0,0,0,.55);backdrop-filter:blur(10px);',
     },
   });
 
-  const AXIS = { color: C.tx3, fontSize: 11, fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace' };
-  const SPLIT = { lineStyle: { color: 'rgba(255,255,255,.06)', width: 1 } };
-  const GRAT = { show: true, lineStyle: { color: 'rgba(255,255,255,.05)', width: 1 } };
-  const MINOR = { show: true, lineStyle: { color: 'rgba(255,255,255,.025)', width: 1 } };
+  const AXIS = { color: C.tx2, fontSize: 12, fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace' };
+  const SPLIT = { lineStyle: { color: 'rgba(148,163,184,.08)', width: 1 } };
+  const GRAT = { show: true, lineStyle: { color: 'rgba(148,163,184,.08)', width: 1 } };
+  const MINOR = { show: true, lineStyle: { color: 'rgba(148,163,184,.04)', width: 1 } };
   const GRID = { left: 56, right: 18, top: 26, bottom: 30 };
 
   const grad = (hex, a1 = 0.22, a2 = 0) => new echarts.graphic.LinearGradient(0, 0, 0, 1, [
@@ -88,16 +105,26 @@
   }
 
   function tooltip(unit = '', nd = 1) {
+    const fmtVal = (raw) => {
+      const n = Number(raw);
+      if (Number.isNaN(n)) return '';
+      // 时间轴：自适应 ms/s，避免全程 “1234 ms”
+      if (unit === 'ms') {
+        const p = fmtTimeParts(n);
+        return p.u ? `${p.v} ${p.u}` : p.v;
+      }
+      return n.toFixed(nd);
+    };
     return {
-    backgroundColor: 'rgba(18,18,18,.96)', borderColor: 'rgba(118,185,0,.4)', borderWidth: 1,
+    backgroundColor: 'rgba(23,27,35,.97)', borderColor: 'rgba(240,180,41,.35)', borderWidth: 1,
     padding: [10, 12], textStyle: { color: C.tx1, fontSize: 12, fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace' },
     extraCssText: 'border-radius:6px;box-shadow:0 8px 28px rgba(0,0,0,.55);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);',
       trigger: 'axis',
       axisPointer: {
         type: 'cross',
         crossStyle: { color: C.tr1, width: 1 },
-        lineStyle: { color: 'rgba(118,185,0,.35)', type: 'dashed', width: 1 },
-        label: { backgroundColor: 'rgba(26,26,26,.96)', color: C.tx1, fontSize: 11, borderRadius: 4, padding: [3, 7], fontFamily: 'ui-monospace, monospace', borderColor: 'rgba(118,185,0,.35)', borderWidth: 1 },
+        lineStyle: { color: 'rgba(240,180,41,.4)', type: 'dashed', width: 1 },
+        label: { backgroundColor: 'rgba(30,35,45,.97)', color: C.tx1, fontSize: 11, borderRadius: 4, padding: [3, 7], fontFamily: 'ui-monospace, monospace', borderColor: 'rgba(240,180,41,.35)', borderWidth: 1 },
       },
       formatter: (ps) => {
         if (!ps || !ps.length) return '';
@@ -105,11 +132,11 @@
         ps.filter((p) => p.value != null && p.seriesName && !p.seriesName.startsWith('_')).forEach((p) => {
           let v = Array.isArray(p.value) ? p.value[1] : p.value;
           if (v == null || Number.isNaN(v)) return;
-          v = Number(v).toFixed(nd);
+          const shown = fmtVal(v);
           h += `<div style="display:flex;align-items:center;gap:9px;min-width:180px;line-height:1.9">
             <span style="width:8px;height:8px;border-radius:50%;background:${p.color};flex:none"></span>
             <span style="color:${C.tx2}">${p.seriesName}</span>
-            <b style="margin-left:auto;font-variant-numeric:tabular-nums;font-family:inherit;font-weight:500">${v}${unit ? ` <span style="color:${C.tx3};font-weight:400">${unit}</span>` : ''}</b></div>`;
+            <b style="margin-left:auto;font-variant-numeric:tabular-nums;font-family:inherit;font-weight:500">${shown}${unit && unit !== 'ms' ? ` <span style="color:${C.tx3};font-weight:400">${unit}</span>` : ''}</b></div>`;
         });
         return h;
       },
@@ -117,10 +144,22 @@
   }
 
   /* 轴标小数位按数据跨度自适应：跨度大用整数，跨度小才加小数。
-     否则 ECharts 会输出 318.4 / 21.88 这种又长又挤、还重复的标签。 */
+     否则 ECharts 会输出 318.4 / 21.88 这种又长又挤、还重复的标签。
+     unit='ms' 时轴名与标签走 fmtTime 自适应（秒级数据不再全是千位 ms）。 */
   function axisLabelFor(values, unit = '') {
     const vs = (values || []).filter((v) => typeof v === 'number' && isFinite(v));
     if (!vs.length) return AXIS;
+    if (unit === 'ms') {
+      const maxAbs = Math.max(...vs.map((v) => Math.abs(v)));
+      const u = maxAbs >= 1000 ? 's' : 'ms';
+      const scale = u === 's' ? 1000 : 1;
+      const span = (Math.max(...vs) - Math.min(...vs)) / scale;
+      const nd = span >= 100 ? 0 : span >= 10 ? 0 : span >= 1 ? 1 : span >= 0.1 ? 2 : 3;
+      return {
+        ...AXIS, hideOverlap: true, name: u,
+        formatter: (v) => `${+(Number(v / scale).toFixed(nd))} ${u}`,
+      };
+    }
     const span = Math.max(...vs) - Math.min(...vs);
     const nd = span >= 100 ? 0 : span >= 10 ? 0 : span >= 1 ? 1 : span >= 0.1 ? 2 : 3;
     // +toFixed 去掉多余的尾随 0（122.0 → 122），否则短面板上标签又长又挤
@@ -282,7 +321,7 @@
       const inst = ch && echarts.getInstanceByDom(ch);
       if (!inst) return;
       const a = document.createElement('a');
-      a.href = inst.getDataURL({ pixelRatio: 2, backgroundColor: C.bg0 || '#09090b' });
+      a.href = inst.getDataURL({ pixelRatio: 2, backgroundColor: C.bg0 || '#0e1014' });
       a.download = `llmbench-${panel.dataset.panel || 'panel'}-${Date.now()}.png`;
       a.click();
       toast('图表已导出 PNG', 'ok');
@@ -352,7 +391,7 @@
   });
 
   window.UI = {
-    C, AXIS, SPLIT, GRAT, MINOR, GRID, fmt, pct, tstr, hm, dtstr, nowTime, esc, grad, hexA,
+    C, AXIS, SPLIT, GRAT, MINOR, GRID, fmt, pct, fmtTime, fmtTimeParts, tstr, hm, dtstr, nowTime, esc, grad, hexA,
     tooltip, base, initChart, noData, axisLabelFor,
     toast, setBusy, openModal, closeModal, confirm: confirmBox,
     openDrawer, closeDrawer, sortable, setPaletteProvider, openPalette,

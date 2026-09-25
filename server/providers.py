@@ -1,4 +1,4 @@
-"""协议适配器：OpenAI 兼容 + Anthropic，流式打点。
+"""协议适配器：OpenAI 兼容 + Anthropic + OpenRouter（OpenAI 兼容），流式打点。
 
 打点口径：
   t0            = 请求发出（time.perf_counter）
@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import socket
 import ssl
@@ -58,8 +59,8 @@ def count_tokens(text: str, model: str) -> tuple[int, bool]:
     return max(1, round(len(text) / 4)), True
 
 
-def cache_from_usage(u: dict | None) -> tuple[int, int]:
-    """把各厂商的缓存字段归一成 (命中, 写入)。
+def cache_from_usage(u: dict | None) -> tuple[int, int, bool]:
+    """把各厂商的缓存字段归一成 (命中, 写入, 是否上报过缓存字段)。
 
     兼容（按调研）：
       OpenAI / GLM / Qwen : usage.prompt_tokens_details.cached_tokens
@@ -67,23 +68,42 @@ def cache_from_usage(u: dict | None) -> tuple[int, int]:
       DeepSeek            : usage.prompt_cache_hit_tokens / prompt_cache_miss_tokens
       Kimi                : usage.cached_tokens（扁平）
       Gemini              : usageMetadata.cached_content_token_count
+
+    reported=True 表示 usage 里出现了任一已知缓存字段（即使值为 0），
+    用于区分「渠道未上报」与「上报了但命中为 0」。
     """
     if not u:
-        return 0, 0
+        return 0, 0, False
     d = u.get("prompt_tokens_details") or {}
-    hit = (d.get("cached_tokens")
-           or u.get("cached_tokens")
-           or u.get("prompt_cache_hit_tokens")
-           or u.get("cache_read_input_tokens")
-           or u.get("cached_content_token_count")
-           or 0)
-    write = (d.get("cache_write_tokens")
-             or u.get("cache_creation_input_tokens")
-             or 0)
+    reported = any(
+        k in d
+        or k in u
+        or (isinstance(u.get("usageMetadata"), dict) and k in u["usageMetadata"])
+        for k in (
+            "cached_tokens",
+            "prompt_cache_hit_tokens",
+            "prompt_cache_miss_tokens",
+            "cache_read_input_tokens",
+            "cached_content_token_count",
+            "cachedContentTokenCount",
+            "cache_write_tokens",
+            "cache_creation_input_tokens",
+        )
+    )
+    hit = (
+        d.get("cached_tokens")
+        or u.get("cached_tokens")
+        or u.get("prompt_cache_hit_tokens")
+        or u.get("cache_read_input_tokens")
+        or u.get("cached_content_token_count")
+        or u.get("cachedContentTokenCount")
+        or 0
+    )
+    write = d.get("cache_write_tokens") or u.get("cache_creation_input_tokens") or 0
     try:
-        return int(hit), int(write)
+        return int(hit), int(write), reported
     except (TypeError, ValueError):
-        return 0, 0
+        return 0, 0, reported
 
 
 @dataclass
@@ -99,6 +119,9 @@ class RequestResult:
     in_tokens: int = 0
     cached_tokens: int = 0
     cache_write_tokens: int = 0
+    cache_reported: bool = (
+        False  # 渠道 usage 是否出现过缓存字段（区分未上报 vs 命中 0）
+    )
     tokens_estimated: bool = False
     bytes_rx: int = 0
     error_class: str | None = None
@@ -178,6 +201,8 @@ def _phase_probe(
 ) -> tuple[float | None, float | None, float | None]:
     """冷连接模式下的 DNS/TCP/TLS 分段时间（best-effort）。"""
     dns = tcp = tls = None
+    raw = None
+    wrapped = None
     try:
         t = time.perf_counter()
         infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
@@ -195,11 +220,13 @@ def _phase_probe(
             ctx = ssl.create_default_context()
             wrapped = ctx.wrap_socket(raw, server_hostname=host)
             tls = (time.perf_counter() - t) * 1000
-            wrapped.close()
-        else:
-            raw.close()
     except Exception:
         pass
+    finally:
+        if wrapped is not None:
+            wrapped.close()
+        elif raw is not None:
+            raw.close()
     return dns, tcp, tls
 
 
@@ -219,6 +246,8 @@ def _body_common(target: Target, cfg: RunConfig) -> dict:
 def _endpoint(target: Target, default_path: str) -> str:
     if target.path:
         p = target.path
+        if p.startswith("http://") or p.startswith("https://"):
+            return p
     else:
         p = default_path
     base = target.base_url.rstrip("/")
@@ -250,12 +279,18 @@ def _headers(target: Target, provider: Provider) -> dict:
         "Accept": "text/event-stream",
     }
     if provider == Provider.anthropic:
-        h["x-api-key"] = target.api_key
-        h["anthropic-version"] = "2023-06-01"
-        if target.api_key and target.api_key.startswith("sk-ant"):
-            h["Authorization"] = f"Bearer {target.api_key}"
-    else:
+        if target.api_key:
+            h["x-api-key"] = target.api_key
+            h["anthropic-version"] = "2023-06-01"
+            if target.api_key.startswith("sk-ant"):
+                h["Authorization"] = f"Bearer {target.api_key}"
+    elif target.api_key:
+        # openai / openrouter 均为 Bearer（openrouter 可选 Referer 参与排行）
+        # 空 key 禁止拼 `Bearer `（httpx 报 Illegal header value）
         h["Authorization"] = f"Bearer {target.api_key}"
+        if provider == Provider.openrouter:
+            h.setdefault("HTTP-Referer", "http://127.0.0.1:8787")
+            h.setdefault("X-Title", "llm-bench")
     h.update(target.extra_headers or {})
     return h
 
@@ -269,6 +304,7 @@ async def execute(
     timeout: float | None = None,
 ) -> RequestResult:
     res = RequestResult()
+    request_timeout = timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT
     tr = cfg.traffic
     if target.provider == Provider.anthropic:
         url = _endpoint(target, "/v1/messages")
@@ -286,22 +322,60 @@ async def execute(
             body["stream"] = True
             body["stream_options"] = {"include_usage": True}
 
+    t0 = time.perf_counter()
+    timeout_handle = None
+    timed_out = False
+    total_timeout = timeout if timeout is not None else cfg.timeout_s
+    if total_timeout > 0:
+        loop = asyncio.get_running_loop()
+        current_task = asyncio.current_task()
+
+        def on_timeout() -> None:
+            nonlocal timed_out
+            timed_out = True
+            if current_task and not current_task.done():
+                current_task.cancel()
+
+        timeout_handle = loop.call_later(total_timeout, on_timeout)
+
     if not cfg.connection_reuse and target.provider is not None:
         try:
             u = httpx.URL(url)
-            res.dns_ms, res.tcp_ms, res.tls_ms = _phase_probe(
-                u.host,
-                u.port or (443 if u.scheme == "https" else 80),
-                u.scheme == "https",
+            res.dns_ms, res.tcp_ms, res.tls_ms = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _phase_probe,
+                    u.host,
+                    u.port or (443 if u.scheme == "https" else 80),
+                    u.scheme == "https",
+                ),
+                timeout=total_timeout,
             )
+        except asyncio.TimeoutError:
+            if timeout_handle is not None:
+                timeout_handle.cancel()
+            res.e2e_ms = (time.perf_counter() - t0) * 1000
+            res.error_class = "timeout"
+            res.error_msg = f"预探测超过 {total_timeout:g} 秒"
+            return res
+        except asyncio.CancelledError:
+            if timeout_handle is not None:
+                timeout_handle.cancel()
+            if not timed_out:
+                raise
+            res.e2e_ms = (time.perf_counter() - t0) * 1000
+            res.error_class = "timeout"
+            res.error_msg = f"预探测超过 {total_timeout:g} 秒"
+            return res
         except Exception:
             pass
 
-    t0 = time.perf_counter()
     try:
         if not cfg.stream:
             resp = await client.post(
-                url, headers=_headers(target, target.provider), json=body, timeout=timeout
+                url,
+                headers=_headers(target, target.provider),
+                json=body,
+                timeout=request_timeout,
             )
             res.status_code = resp.status_code
             data = resp.content
@@ -319,7 +393,14 @@ async def execute(
             res.e2e_ms = (time.perf_counter() - t0) * 1000
             res.ttft_ms = res.e2e_ms
             text, out_tok, in_tok = _extract_nonstream(j, target.provider)
-            cache_hit, cache_write = cache_from_usage(j.get("usage"))
+            cache_hit, cache_write, cache_rep = cache_from_usage(
+                j.get("usage") or j.get("usageMetadata") or {}
+            )
+            usage_meta = j.get("usage") or j.get("usageMetadata") or {}
+            if out_tok is None:
+                out_tok = usage_meta.get("candidatesTokenCount")
+            if in_tok is None:
+                in_tok = usage_meta.get("promptTokenCount")
             if out_tok is None:
                 out_tok, est = count_tokens(text, target.model)
                 res.tokens_estimated = est
@@ -332,12 +413,17 @@ async def execute(
                 res.in_tokens = res.in_tokens + cache_hit + cache_write
             res.cached_tokens = cache_hit
             res.cache_write_tokens = cache_write
+            res.cache_reported = cache_rep
             res.text = text
             res.ok = True
             return res
 
         async with client.stream(
-            "POST", url, headers=_headers(target, target.provider), json=body, timeout=timeout
+            "POST",
+            url,
+            headers=_headers(target, target.provider),
+            json=body,
+            timeout=request_timeout,
         ) as resp:
             res.status_code = resp.status_code
             if resp.status_code >= 400:
@@ -354,6 +440,7 @@ async def execute(
             first_ts: float | None = None
             last_ts = t0
             got_content = False
+            protocol_complete = False
             async for line in resp.aiter_lines():
                 if not line:
                     continue
@@ -365,6 +452,7 @@ async def execute(
                     continue
                 payload = line[5:].strip()
                 if payload == "[DONE]":
+                    protocol_complete = True
                     break
                 try:
                     obj = json.loads(payload)
@@ -378,8 +466,9 @@ async def execute(
                         if u.get("input_tokens") is not None:
                             usage_in = u["input_tokens"]
                         # Anthropic 的缓存字段在 message_start.usage 里（流式唯一机会）
-                        ch, cw = cache_from_usage(u)
+                        ch, cw, rep = cache_from_usage(u)
                         res.cached_tokens, res.cache_write_tokens = ch, cw
+                        res.cache_reported = res.cache_reported or rep
                         # Anthropic 语义：input_tokens 不含缓存部分，就地归一成总输入，
                         # 流式末尾统一从 usage_in 赋值（中途改 res.in_tokens 会被覆盖）
                         if (ch or cw) and usage_in is not None:
@@ -394,27 +483,43 @@ async def execute(
                             text_parts.append(delta["text"])
                             last_ts = now
                     elif etype == "message_delta":
-                        u = obj.get("usage") or {}
+                        u = obj.get("usage") or obj.get("usageMetadata") or {}
                         if u.get("output_tokens") is not None:
                             usage_out = u["output_tokens"]
+                    elif etype == "message_stop":
+                        protocol_complete = True
                     elif etype == "error":
                         res.error_class = "protocol_error"
                         res.error_msg = json.dumps(obj)[:400]
                         return res
                 else:
                     choices = obj.get("choices") or []
-                    if obj.get("usage"):
-                        u = obj["usage"]
+                    if obj.get("usage") or obj.get("usageMetadata"):
+                        u = obj.get("usage") or obj.get("usageMetadata") or {}
                         if u.get("completion_tokens") is not None:
                             usage_out = u["completion_tokens"]
+                        elif u.get("candidatesTokenCount") is not None:
+                            usage_out = u["candidatesTokenCount"]
                         if u.get("prompt_tokens") is not None:
                             usage_in = u["prompt_tokens"]
-                        ch, cw = cache_from_usage(u)
+                        elif u.get("promptTokenCount") is not None:
+                            usage_in = u["promptTokenCount"]
+                        ch, cw, rep = cache_from_usage(u)
                         res.cached_tokens, res.cache_write_tokens = ch, cw
+                        res.cache_reported = res.cache_reported or rep
                     delta_text = ""
                     if choices:
+                        if choices[0].get("finish_reason") is not None:
+                            protocol_complete = True
                         delta = choices[0].get("delta") or {}
                         delta_text = delta.get("content") or ""
+                        if isinstance(delta_text, list):
+                            delta_text = "".join(
+                                str(part.get("text", ""))
+                                if isinstance(part, dict)
+                                else str(part)
+                                for part in delta_text
+                            )
                     if delta_text:
                         content_events.append(now)
                         if not got_content:
@@ -423,6 +528,10 @@ async def execute(
                         text_parts.append(delta_text)
                         last_ts = now
 
+            if not protocol_complete:
+                res.error_class = "stream_interrupted"
+                res.error_msg = "流式响应在终止事件前结束"
+                return res
             end = time.perf_counter()
             res.e2e_ms = (end - t0) * 1000
             if not got_content:
@@ -459,12 +568,32 @@ async def execute(
                 res.tpot_ms = (res.e2e_ms - res.ttft_ms) / (res.out_tokens - 1)
             res.ok = True
             return res
+    except asyncio.CancelledError:
+        if timed_out:
+            res.e2e_ms = (time.perf_counter() - t0) * 1000
+            res.error_class = "timeout"
+            res.error_msg = f"请求超过 {total_timeout:g} 秒"
+            return res
+        raise
     except Exception as exc:  # noqa: BLE001
+        elapsed = time.perf_counter() - t0
+        if (
+            timed_out
+            or isinstance(exc, httpx.TimeoutException)
+            or elapsed >= total_timeout * 0.75
+        ):
+            res.e2e_ms = (time.perf_counter() - t0) * 1000
+            res.error_class = "timeout"
+            res.error_msg = f"请求超过 {total_timeout:g} 秒"
+            return res
         res.status_code = res.status_code
         res.error_class, res.error_msg = classify_error(res.status_code, "", exc)
         if res.e2e_ms is None:
             res.e2e_ms = (time.perf_counter() - t0) * 1000
         return res
+    finally:
+        if timeout_handle is not None:
+            timeout_handle.cancel()
 
 
 def _extract_nonstream(
@@ -478,7 +607,12 @@ def _extract_nonstream(
         ]
         text = "".join(parts)
         u = j.get("usage") or {}
-        return text, u.get("output_tokens"), u.get("input_tokens")
+        input_tokens = u.get("input_tokens")
+        if input_tokens is not None:
+            input_tokens += (u.get("cache_read_input_tokens") or 0) + (
+                u.get("cache_creation_input_tokens") or 0
+            )
+        return text, u.get("output_tokens"), input_tokens
     choices = j.get("choices") or []
     text = ""
     if choices:
@@ -501,6 +635,7 @@ async def probe(
     client: httpx.AsyncClient, target: Target, cfg: RunConfig
 ) -> RequestResult:
     """单次探活/测速：强制采集 DNS/TCP/TLS 分段耗时后跑一次请求。"""
+    deadline = time.monotonic() + cfg.timeout_s
     try:
         u = httpx.URL(
             _endpoint(
@@ -511,9 +646,26 @@ async def probe(
             )
         )
         port = u.port or (443 if u.scheme == "https" else 80)
-        dns, tcp, tls = _phase_probe(u.host, port, u.scheme == "https")
+        dns, tcp, tls = await asyncio.wait_for(
+            asyncio.to_thread(_phase_probe, u.host, port, u.scheme == "https"),
+            timeout=cfg.timeout_s,
+        )
+    except asyncio.TimeoutError:
+        return RequestResult(
+            error_class="timeout",
+            error_msg=f"预探测超过 {cfg.timeout_s:g} 秒",
+            e2e_ms=cfg.timeout_s * 1000,
+        )
     except Exception:
         dns = tcp = tls = None
-    res = await execute(client, target, cfg, [{"role": "user", "content": "hi"}], 1)
+    remaining = max(0.001, deadline - time.monotonic())
+    res = await execute(
+        client,
+        target,
+        cfg,
+        [{"role": "user", "content": "hi"}],
+        1,
+        timeout=remaining,
+    )
     res.dns_ms, res.tcp_ms, res.tls_ms = dns, tcp, tls
     return res

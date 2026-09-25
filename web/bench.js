@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const { fmt, pct, esc, hm, dtstr } = UI;
 const C = UI.C;
 
-const state = { targets: [], dims: [], lmEval: null, engine: 'curated', selected: new Set(), current: null, runs: [], lastSummary: null, filter: '' };
+const state = { targets: [], dims: [], lmEval: null, engine: 'curated', selected: new Set(), current: null, currentStatus: 'idle', lastEventId: 0, sse: null, runIds: [], seenItems: new Set(), runs: [], lastSummary: null, filter: '' };
 let dimChart = null, trendChart = null;
 
 function ensureCharts() {
@@ -46,12 +46,13 @@ function renderDims() {
       return;
     }
     box.innerHTML = L.tasks.map((t) => {
-      const on = state.selected.has(t.task);
-      return `<label class="dim ${on ? 'on' : ''}" data-dim="${t.task}">
-        <input type="checkbox" ${on ? 'checked' : ''} />
+      const on = state.selected.has(t.task) && !t.logprobs;
+      const unsupported = t.logprobs;
+      return `<label class="dim ${on ? 'on' : ''} ${unsupported ? 'unsupported' : ''}" data-dim="${t.task}" data-logprobs="${unsupported ? '1' : '0'}">
+        <input type="checkbox" ${on ? 'checked' : ''} ${unsupported ? 'disabled' : ''} />
         <span class="dn">${esc(t.label)}</span>
         <span class="db">${esc(t.task)}</span>
-        <span class="dc">${t.logprobs ? '需 logprobs' : '生成式'}</span>
+        <span class="dc">${unsupported ? '当前执行器不支持' : '生成式'}</span>
       </label>`;
     }).join('');
     return;
@@ -68,6 +69,7 @@ document.addEventListener('click', (e) => {
   const el = e.target.closest('.dim');
   if (!el) return;
   const dim = el.dataset.dim;
+  if (el.dataset.logprobs === '1') { UI.toast('当前执行器不支持 logprobs 任务', 'warn'); return; }
   if (state.selected.has(dim)) state.selected.delete(dim); else state.selected.add(dim);
   renderDims();
 });
@@ -145,6 +147,25 @@ function buildBody() {
   }
   return body;
 }
+function syncBenchControls() {
+  const run = $('btnBenchRun');
+  const stop = $('btnBenchStop');
+  const actions = $('side-actions-bench');
+  if (!run || !stop) return;
+  const active = state.currentStatus === 'running' || state.currentStatus === 'pending';
+  const batchActive = state.runIds.length > 0;
+  const stopping = state.currentStatus === 'stopping';
+  const finished = ['done', 'error', 'stopped'].includes(state.currentStatus);
+  run.disabled = active || stopping || batchActive || run.dataset.busy === '1';
+  stop.disabled = !batchActive || stopping;
+  if (run.dataset.busy !== '1') {
+    run.textContent = stopping ? '正在停止…' : state.currentStatus === 'running' ? '检测进行中' : finished ? '重新检测' : '开始检测';
+    run.setAttribute('aria-label', run.textContent);
+  }
+  stop.textContent = '停止检测';
+  actions?.setAttribute('data-state', state.currentStatus);
+}
+
 async function startRun() {
   if (!state.targets.length) { await doParse(); if (!state.targets.length) { UI.toast('请先粘贴配置并点「识别配置」', 'warn'); return; } }
   if (!state.selected.size) { UI.toast('请至少选择一个维度', 'warn'); return; }
@@ -153,18 +174,27 @@ async function startRun() {
   UI.setBusy(btn, true, '启动中…');
   try {
     const d = await fetchJSON('/api/bench/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildBody()) });
+    state.runIds = d.run_ids;
     state.current = d.run_ids[0];
+    state.currentStatus = 'running';
+    syncBenchControls();
     $('b-itemsBody').innerHTML = '';
     $('b-progress').textContent = '0/0';
     renderVerdict({ verdict: 'running' }); ensureCharts(); UI.noData($('b-ch-dims'), 'No data'); UI.noData($('b-ch-trend'));
+    if (state.sse) state.sse.close();
+    state.lastEventId = 0;
+    state.seenItems.clear();
+    state.sse = null;
     UI.toast('降智检测已启动', 'ok');
     connectSSE(state.current);
   } catch (e) { UI.toast('启动失败: ' + e.message, 'err'); }
-  finally { UI.setBusy(btn, false); }
+  finally { UI.setBusy(btn, false); syncBenchControls(); }
 }
 window.__benchStart = startRun;
-function connectSSE(rid) {
-  const es = new EventSource(`/api/bench/runs/${rid}/stream`);
+function connectSSE(rid, resetAck = false, afterId = null) {
+  const query = resetAck ? `?reset=1&after_id=${encodeURIComponent(afterId ?? 0)}` : '';
+  const es = new EventSource(`/api/bench/runs/${rid}/stream${query}`);
+  state.sse = es;
   es.onopen = () => {
     const el = $('b-progress');
     // HTML 默认是 "0/0"：仅在尚未收到 progress 时才显示「连接中…」
@@ -172,6 +202,15 @@ function connectSSE(rid) {
   };
   es.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.id != null) {
+      if (state.lastEventId && m.id <= state.lastEventId) return;
+      state.lastEventId = m.id;
+    }
+    if (m.type === 'reset') {
+      state.lastEventId = 0;
+      viewing(rid, true);
+      return;
+    }
     if (m.type === 'item') addItem(m.data);
     else if (m.type === 'progress') {
       const el = $('b-progress');
@@ -179,13 +218,23 @@ function connectSSE(rid) {
       el.textContent = `${m.done}/${m.total}`;
       $('b-passed').textContent = m.ok;
     }
-    else if (m.type === 'summary') { renderSummary(m.data); es.close(); loadHistory(); UI.toast('降智检测完成', 'ok'); }
+    else if (m.type === 'summary') {
+      syncBenchControls();
+      renderSummary(m.data);
+    }
     else if (m.type === 'status') {
+       state.currentStatus = m.status;
+       if (m.id != null && ['done', 'error', 'stopped'].includes(m.status)) {
+         state.runIds = state.runIds.length <= 1 ? [] : state.runIds.filter((rid) => rid !== state.current);
+       }
+       syncBenchControls();
       if (['done', 'error', 'stopped'].includes(m.status)) {
         if (m.status !== 'done') renderVerdict({ verdict: 'error', note: m.status === 'stopped' ? '已停止' : '出错' });
+        loadHistory();
+        if (m.status === 'done') UI.toast('降智检测完成', 'ok');
         es.close();
       }
-    } else if (m.type === 'error') { renderVerdict({ verdict: 'error', note: m.message }); UI.toast('检测出错: ' + m.message, 'err'); es.close(); }
+    } else if (m.type === 'error') { state.currentStatus = 'error'; syncBenchControls(); renderVerdict({ verdict: 'error', note: m.message }); UI.toast('检测出错: ' + m.message, 'err'); }
   };
   // 可见重连提示：不让 EventSource 静默死亡（原实现直接 close 屏蔽自动重连）
   es.onerror = () => {
@@ -200,6 +249,9 @@ function connectSSE(rid) {
   };
 }
 function addItem(d) {
+  const key = `${d.dim}::${d.item_id}`;
+  if (state.seenItems.has(key)) return;
+  state.seenItems.add(key);
   const tr = document.createElement('tr');
   tr.innerHTML = `<td>${esc(d.dim)}</td><td class="mono">${esc(d.item_id)}</td>
     <td><span class="badge ${d.passed ? 'ok' : 'no'}">${d.passed ? 'PASS' : 'FAIL'}</span></td>
@@ -234,23 +286,24 @@ function renderVerdict(s) {
   const [title, cls, note] = map[v] || ['—', '', ''];
   const total = s.total != null ? (s.total * 100).toFixed(1) + '%' : '—';
   const delta = c.delta != null ? (c.delta > 0 ? '+' : '') + (c.delta * 100).toFixed(1) + 'pp' : '';
-  const extra = [];
-  const n = s.completed || s.n_items;
-  if (n) extra.push(`样本 ${n} 题`);
-  if (n && n < 200) extra.push('样本偏小，结论仅作趋势参考');
-  if (c.baseline_total != null) extra.push(`基线 ${(c.baseline_total * 100).toFixed(1)}%`);
-  if (c.p_value != null) {
-    extra.push(`p=${c.p_value}（${c.paired ? 'McNemar 配对' : '两比例'}）`);
-    if (!c.significant) extra.push('变化不显著');
-  }
-  if (c.n_paired) extra.push(`配对题数 ${c.n_paired}`);
-  if (c.fingerprint_changed) extra.push('指纹变化 ⚠');
-  if (c.flag_dims && c.flag_dims.length) extra.push('下降维度: ' + c.flag_dims.join(', '));
-  if (s.consistency_match != null) extra.push(`自洽 ${(s.consistency_match * 100).toFixed(0)}%`);
+  const stats = [];
+  const notes = [note];
+  const n = s.n_items ?? s.completed ?? null;
+  if (s.n_items != null || s.completed != null) stats.push(`样本 <b>${s.completed ?? 0}/${s.n_items ?? '—'}</b>`);
+  const passed = Object.values(s.dims || {}).reduce((a, d) => a + (d.passed || 0), 0);
+  if (Object.keys(s.dims || {}).length) stats.push(`通过 <b>${passed}</b>`);
+  if (c.baseline_total != null) stats.push(`基线 <b>${(c.baseline_total * 100).toFixed(1)}%</b>`);
+  if (c.p_value != null) stats.push(`p <b>${Number(c.p_value).toFixed(3)}</b>`);
+  if (s.consistency_match != null) stats.push(`自洽 <b>${(s.consistency_match * 100).toFixed(0)}%</b>`);
+  if (n != null && n < 200) notes.push('样本偏小，仅作趋势参考');
+  if (c.p_value != null && !c.significant) notes.push('变化不显著');
+  if (c.n_paired) notes.push(`配对题数 ${c.n_paired}`);
+  if (c.fingerprint_changed) notes.push('题集指纹变化');
+  if (c.flag_dims && c.flag_dims.length) notes.push(`下降维度：${c.flag_dims.join('、')}`);
   const el = $('b-verdict');
   el.className = `verdict ${cls}`;
   const right = v === 'idle' ? '' : `<div class="vright"><div class="vscore">${total}</div><div class="vdelta ${c.delta < 0 ? 'down' : c.delta > 0 ? 'up' : ''}">${delta}</div></div>`;
-  el.innerHTML = `<div class="vleft"><div class="vtitle">${title}</div><div class="vnote">${note}${extra.length ? ' · ' + extra.join(' · ') : ''}</div></div>${right}`;
+  el.innerHTML = `<div class="vleft"><div class="vtitle">${title}</div><div class="vnote">${notes.filter(Boolean).join(' · ')}</div>${stats.length ? `<div class="vstats">${stats.map((item) => `<span class="vstat">${item}</span>`).join('')}</div>` : ''}</div>${right}`;
 }
 function renderDimChart(s) {
   if (!dimChart) return;
@@ -291,6 +344,7 @@ function renderTrend(s) {
   if (!run) { UI.noData($('b-ch-trend')); return; }
   const same = state.runs
     .filter((r) => r.base_url_masked === run.base_url_masked && r.model === run.model)
+    .filter((r) => !run.task_key || r.task_key === run.task_key)
     .sort((a, b) => a.ts - b.ts);
   if (!same.length) { UI.noData($('b-ch-trend')); return; }
 
@@ -326,9 +380,9 @@ function renderTrend(s) {
     series: [{
       name: '总分', type: 'line', smooth: 0.35, symbol: 'circle', symbolSize: 7,
       data,
-      lineStyle: { color: C.tr4, width: 2, cap: 'round', join: 'round', shadowColor: C.tr4, shadowBlur: 10 },
+      lineStyle: { color: C.tr4, width: 2, cap: 'round', join: 'round', shadowColor: C.tr4, shadowBlur: 4 },
       itemStyle: { color: C.tr4, borderColor: C.bg0, borderWidth: 2 },
-      areaStyle: { color: UI.grad(C.tr4, .16, 0) },
+      areaStyle: { color: UI.grad(C.tr4, .10, 0) },
       // 基线参考线：一眼看出"比基线高还是低"
       markLine: base != null ? {
         silent: true, symbol: 'none',
@@ -356,8 +410,13 @@ function renderTrend(s) {
 async function loadHistory() {
   const d = await fetchJSON('/api/bench/runs');
   state.runs = d.runs;
+  const current = d.runs.find((r) => r.run_id === state.current) || d.runs[0];
+  state.currentStatus = current?.status || 'idle';
+  state.runIds = d.runs.filter((r) => ['running', 'pending', 'stopping'].includes(r.status)).map((r) => r.run_id);
+  syncBenchControls();
   renderHist();
   if (!state.current && d.runs.length) viewing(d.runs[0].run_id);
+  if (state.current && ['running', 'pending', 'stopping'].includes(state.currentStatus) && !state.sse) viewing(state.current);
 }
 function renderHist() {
   $('b-histBody').innerHTML = state.runs.map((r) => `<tr>
@@ -373,13 +432,21 @@ function renderHist() {
         <button class="mini ghost" data-bact="del" data-id="${r.run_id}">删</button>
       </td></tr>`).join('') || '<tr><td colspan="7" class="hint">暂无记录</td></tr>';
 }
-async function viewing(id) {
+async function viewing(id, resetAck = false) {
   const body = $('b-itemsBody');
   body.innerHTML = '<tr><td colspan="6" class="hint">加载中…</td></tr>';
   try {
+    if (state.sse) { state.sse.close(); state.sse = null; state.lastEventId = 0; }
     const d = await fetchJSON(`/api/bench/runs/${id}`);
-    state.current = id;
-    renderSummary(d.run.scores || {});
+     state.current = id;
+     state.seenItems = new Set((d.items || []).map((it) => `${it.dim}::${it.item_id}`));
+     state.lastEventId = d.event_seq || 0;
+     const meta = state.runs.find((r) => r.run_id === id);
+     state.currentStatus = meta?.status || 'idle';
+     state.runIds = state.runs.filter((r) => ['running', 'pending', 'stopping'].includes(r.status)).map((r) => r.run_id);
+     syncBenchControls();
+     if (['running', 'pending', 'stopping'].includes(state.currentStatus) && !state.sse) connectSSE(id, true, state.lastEventId);
+     renderSummary(d.run.scores || {});
     const rows = d.items.map((it) => `<tr>
     <td>${esc(it.dim)}</td><td class="mono">${esc(it.item_id)}</td>
     <td><span class="badge ${it.passed ? 'ok' : 'no'}">${it.passed ? 'PASS' : 'FAIL'}</span></td>
@@ -392,6 +459,7 @@ async function viewing(id) {
   } catch (e) {
     body.innerHTML = `<tr><td colspan="6" class="hint">加载失败：${esc(e.message)}</td></tr>`;
     UI.toast('加载详情失败: ' + e.message, 'err');
+    if (resetAck) setTimeout(() => viewing(id, true), 1200);
   }
 }
 document.addEventListener('click', async (e) => {
@@ -401,7 +469,14 @@ document.addEventListener('click', async (e) => {
   if (bact === 'view') viewing(id);
   else if (bact === 'base') { await fetchJSON(`/api/bench/runs/${id}/baseline`, { method: 'POST' }); UI.toast('已设为基线', 'ok'); loadHistory(); }
   else if (bact === 'del') {
-    if (await UI.confirm('删除该检测记录？', '删除记录')) { await fetch(`/api/bench/runs/${id}`, { method: 'DELETE' }); if (state.current === id) state.current = null; UI.toast('已删除', 'ok'); loadHistory(); }
+    if (await UI.confirm('删除该检测记录？', '删除记录')) {
+      try {
+        await fetchJSON(`/api/bench/runs/${id}`, { method: 'DELETE' });
+        if (state.current === id) state.current = null;
+        UI.toast('已删除', 'ok');
+        loadHistory();
+      } catch (e) { UI.toast('删除失败: ' + e.message, 'err'); }
+    }
   }
 });
 
@@ -414,6 +489,12 @@ $('benchSearch').oninput = () => {
   const q = $('benchSearch').value.trim().toLowerCase();
   [...$('b-itemsBody').children].forEach((tr) => { tr.style.display = (!q || tr.textContent.toLowerCase().includes(q)) ? '' : 'none'; });
 };
+setInterval(() => {
+  if (state.runIds.length || ['running', 'pending', 'stopping'].includes(state.currentStatus)) {
+    loadHistory().catch(() => {});
+  }
+}, 3000);
+
 window.addEventListener('viewchange', (e) => {
   if (!e.detail || e.detail.view !== 'bench') return;
   ensureCharts();
@@ -422,7 +503,7 @@ window.addEventListener('viewchange', (e) => {
 
 $('btnBenchParse').onclick = doParse;
 $('btnBenchRun').onclick = startRun;
-$('btnBenchStop').onclick = async () => { if (state.current) { await fetchJSON(`/api/bench/runs/${state.current}/stop`, { method: 'POST' }); UI.toast('已发送停止', 'info'); } };
+$('btnBenchStop').onclick = async () => { if (state.runIds.length) { await Promise.all(state.runIds.map((rid) => fetchJSON(`/api/bench/runs/${rid}/stop`, { method: 'POST' }))); state.currentStatus = 'stopping'; syncBenchControls(); UI.toast('已发送停止', 'info'); } };
 /* 题集切换：切引擎时重置选择并切换参数区 */
 $('b-engine').onchange = () => {
   state.engine = $('b-engine').value;
@@ -451,6 +532,7 @@ $('btnPredownload').onclick = async () => {
 $('btnBenchDemo').onclick = () => { $('b-paste').value = 'base_url: https://api.openai.com\napi_key: sk-your-key\nmodel: gpt-4o-mini'; doParse(); };
 
 renderVerdict({ verdict: 'idle' });
+syncBenchControls();
 UI.noData($('b-ch-dims'), 'No data'); UI.noData($('b-ch-trend'));
 loadDims();
 loadHistory();

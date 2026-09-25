@@ -47,13 +47,16 @@ def build_messages(cfg: RunConfig, model: str) -> tuple[list[dict], int]:
             prompt = "hi"
         else:
             prompt = _gen_text(n)
-    if cfg.randomize:
+    if cfg.randomize and not cfg.cache_mode:
         prompt = f"[{uuid.uuid4().hex[:6]}] {prompt}"
     messages = []
     if tr.system_prompt:
         messages.append({"role": "system", "content": tr.system_prompt})
     messages.append({"role": "user", "content": prompt})
     in_tok, _ = providers.count_tokens(prompt, model)
+    if tr.system_prompt:
+        system_tok, _ = providers.count_tokens(tr.system_prompt, model)
+        in_tok += system_tok
     return messages, in_tok
 
 
@@ -71,16 +74,21 @@ class RunState:
     samples: deque = field(default_factory=lambda: deque(maxlen=5000))
     subscribers: set[asyncio.Queue] = field(default_factory=set)
     tasks: list[asyncio.Task] = field(default_factory=list)
+    active_tasks: set[asyncio.Task] = field(default_factory=set)
     stop_flag: bool = False
     pause_event: asyncio.Event = field(default_factory=asyncio.Event)
+    stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     schedule_id: str | None = None
     alert_cfg: AlertConfig | None = None
     error: str = ""
     consecutive_fail: int = 0
     max_consecutive_fail: int = 0
     t0_mono: float = 0.0
+    ended_mono: float | None = None
     last_summary_at: float = 0.0
     last_phase: dict | None = None
+    event_seq: int = 0
+    events: deque = field(default_factory=lambda: deque(maxlen=2000))
 
 
 KEEP_FINISHED = 40  # 已结束的运行最多在内存里保留多少个（超出按结束时间淘汰）
@@ -99,7 +107,7 @@ class Engine:
         finished = [
             (rid, st)
             for rid, st in self.runs.items()
-            if st.status in (RunStatus.done, RunStatus.error)
+            if st.status in (RunStatus.done, RunStatus.error, RunStatus.stopped)
         ]
         for rid, _ in (
             sorted(finished, key=lambda kv: kv[1].ended_at or 0)[:-KEEP_FINISHED]
@@ -134,6 +142,7 @@ class Engine:
             await self.store.create_run(rid, sub, schedule_cron=schedule_id)
             state.tasks.append(asyncio.create_task(self._drive(state)))
             run_ids.append(rid)
+        await asyncio.sleep(0)
         return run_ids
 
     def get(self, run_id: str) -> RunState | None:
@@ -141,15 +150,26 @@ class Engine:
 
     def stop(self, run_id: str) -> bool:
         st = self.runs.get(run_id)
-        if not st:
+        if not st or st.status in (RunStatus.done, RunStatus.error, RunStatus.stopped):
             return False
         st.stop_flag = True
         st.pause_event.set()
+        st.stop_event.set()
+        st.status = RunStatus.stopping
+        for task in list(st.active_tasks):
+            if not task.done():
+                task.cancel()
+        self._emit(st, {"type": "status", "status": st.status.value})
         return True
 
     def pause(self, run_id: str) -> bool:
         st = self.runs.get(run_id)
-        if not st:
+        if not st or st.status in (
+            RunStatus.stopping,
+            RunStatus.stopped,
+            RunStatus.done,
+            RunStatus.error,
+        ):
             return False
         st.pause_event.clear()
         st.status = RunStatus.paused
@@ -158,18 +178,54 @@ class Engine:
 
     def resume(self, run_id: str) -> bool:
         st = self.runs.get(run_id)
-        if not st:
+        if not st or st.status != RunStatus.paused:
             return False
         st.pause_event.set()
         st.status = RunStatus.running
         self._emit(st, {"type": "status", "status": st.status.value})
         return True
 
+    async def stop_and_wait(self, run_id: str) -> bool:
+        st = self.runs.get(run_id)
+        if not st:
+            return True
+        if st.status in (RunStatus.done, RunStatus.error, RunStatus.stopped):
+            return True
+        self.stop(run_id)
+        tasks = [task for task in st.tasks if not task.done()]
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=5)
+            if pending:
+                return False
+        return True
+
+    async def shutdown(self) -> None:
+        active = [
+            st
+            for st in self.runs.values()
+            if st.status not in (RunStatus.done, RunStatus.error, RunStatus.stopped)
+        ]
+        for st in active:
+            self.stop(st.run_id)
+        tasks = [task for st in active for task in st.tasks if not task.done()]
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=5)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+
     def subscribe(self, run_id: str) -> asyncio.Queue:
         st = self.runs[run_id]
         q: asyncio.Queue = asyncio.Queue(maxsize=1000)
         st.subscribers.add(q)
         return q
+
+    def replay_since(self, run_id: str, after_id: int) -> list[dict]:
+        st = self.runs.get(run_id)
+        if not st:
+            return []
+        return [event for event in st.events if event.get("id", 0) > after_id]
 
     def unsubscribe(self, run_id: str, q: asyncio.Queue) -> None:
         st = self.runs.get(run_id)
@@ -178,7 +234,25 @@ class Engine:
 
     # ---------- 内部 ----------
     def _emit(self, st: RunState, event: dict) -> None:
+        st.event_seq += 1
+        event = {**event, "id": st.event_seq}
+        st.events.append(event)
+        reliable = event.get("type") in {"summary", "status", "error"}
         for q in list(st.subscribers):
+            if q.full():
+                try:
+                    q.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                if not reliable:
+                    try:
+                        q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        q.put_nowait({"type": "reset"})
+                    except asyncio.QueueFull:
+                        pass
             try:
                 q.put_nowait(event)
             except asyncio.QueueFull:
@@ -207,7 +281,7 @@ class Engine:
 
     async def _drive(self, st: RunState) -> None:
         cfg = st.cfg
-        st.status = RunStatus.running
+        st.status = RunStatus.stopping if st.stop_flag else RunStatus.running
         st.started_at = time.time()
         st.t0_mono = time.perf_counter()
         await self.store.set_status(st.run_id, RunStatus.running)
@@ -229,18 +303,37 @@ class Engine:
             self._emit(st, {"type": "error", "message": str(exc)})
             st.status = RunStatus.error
         finally:
-            await client.aclose()
-        if st.status not in (RunStatus.error,):
-            st.status = RunStatus.done
-        st.ended_at = time.time()
-        await self.store.set_status(st.run_id, st.status, ended=True)
-        self._evict()
-        # 终态汇总
-        summary = await self._final_summary(st)
-        self._emit(st, {"type": "summary", "final": True, "data": summary})
-        self._emit(st, {"type": "status", "status": st.status.value})
-        if st.alert_cfg is not None:
-            await self._evaluate_alert(st, summary)
+            try:
+                await client.aclose()
+            except Exception as exc:  # noqa: BLE001
+                st.status = RunStatus.error
+                st.error = f"{type(exc).__name__}: {exc}"
+        try:
+            st.ended_at = time.time()
+            st.ended_mono = time.perf_counter()
+            self._evict()
+            summary = await self._final_summary(st)
+            await self.store.set_summary(st.run_id, summary)
+            if st.status is RunStatus.error:
+                pass
+            elif st.stop_flag:
+                st.status = RunStatus.stopped
+            elif st.status not in (RunStatus.error, RunStatus.stopping):
+                st.status = RunStatus.done
+            if st.alert_cfg is not None:
+                await self._evaluate_alert(st, summary)
+            await self.store.set_status(st.run_id, st.status, ended=True)
+            self._emit(st, {"type": "summary", "final": True, "data": summary})
+            self._emit(st, {"type": "status", "status": st.status.value})
+        except Exception as exc:  # noqa: BLE001
+            st.status = RunStatus.error
+            st.error = f"{type(exc).__name__}: {exc}"
+            try:
+                await self.store.set_status(st.run_id, st.status, ended=True)
+            except Exception:
+                pass
+            self._emit(st, {"type": "error", "message": st.error})
+            self._emit(st, {"type": "status", "status": st.status.value})
 
     async def _fire(
         self,
@@ -256,9 +349,16 @@ class Engine:
         send_mono = time.perf_counter()
         # 预热只用于建立连接/确认可用，不该用完整超时把界面卡住
         tmo = min(cfg.timeout_s, 20.0) if warmup else None
-        res = await providers.execute(
-            client, target, cfg, messages, in_tok, timeout=tmo
-        )
+        task = asyncio.current_task()
+        if task is not None and task not in st.tasks:
+            st.active_tasks.add(task)
+        try:
+            res = await providers.execute(
+                client, target, cfg, messages, in_tok, timeout=tmo
+            )
+        finally:
+            if task is not None:
+                st.active_tasks.discard(task)
         arrive = time.perf_counter()
         st.seq += 1
         observed = (arrive - send_mono) * 1000
@@ -284,6 +384,7 @@ class Engine:
             in_tokens=res.in_tokens,
             cached_tokens=res.cached_tokens,
             cache_write_tokens=res.cache_write_tokens,
+            cache_reported=res.cache_reported,
             tokens_estimated=res.tokens_estimated,
             status_code=res.status_code,
             ok=res.ok,
@@ -320,7 +421,7 @@ class Engine:
             st.consecutive_fail += 1
             st.max_consecutive_fail = max(st.max_consecutive_fail, st.consecutive_fail)
         st.samples.append(rec)
-        self.store.enqueue(rec)
+        await self.store.enqueue(rec)
         self._emit(
             st,
             {
@@ -358,23 +459,34 @@ class Engine:
     async def _run_closed(self, st: RunState, client: httpx.AsyncClient) -> None:
         cfg = st.cfg
         await self._warmup(st, client)
+        st.t0_mono = time.perf_counter()
         if cfg.mode.value == "duration":
             await self._run_duration(st, client)
             return
         counter = {"n": 0}
         lock = asyncio.Lock()
 
-        async def worker():
+        async def worker(worker_index: int):
+            if cfg.ramp_rate > 0 and worker_index:
+                try:
+                    await asyncio.wait_for(
+                        st.stop_event.wait(), timeout=worker_index / cfg.ramp_rate
+                    )
+                except asyncio.TimeoutError:
+                    pass
             while not st.stop_flag:
                 async with lock:
                     if counter["n"] >= cfg.request_count:
                         return
                     counter["n"] += 1
                 await st.pause_event.wait()
+                if st.stop_flag:
+                    return
                 await self._handle(st, client, None)
 
         await asyncio.gather(
-            *[asyncio.create_task(worker()) for _ in range(max(1, cfg.concurrency))]
+            *[asyncio.create_task(worker(i)) for i in range(max(1, cfg.concurrency))],
+            return_exceptions=True,
         )
 
     async def _run_duration(self, st: RunState, client: httpx.AsyncClient) -> None:
@@ -392,7 +504,12 @@ class Engine:
                     ratio = elapsed / cfg.ramp_s
                     allowed = max(1, int(cfg.concurrency * ratio))
                     if sem._value > allowed:  # noqa: SLF001
-                        await asyncio.sleep(0.2)
+                        try:
+                            await asyncio.wait_for(st.stop_event.wait(), timeout=0.2)
+                        except asyncio.TimeoutError:
+                            pass
+                        if st.stop_flag:
+                            return
                         continue
                 phase = "steady"
                 if cfg.ramp_s > 0 and elapsed < cfg.ramp_s:
@@ -409,7 +526,8 @@ class Engine:
                     _ = phase
 
         await asyncio.gather(
-            *[asyncio.create_task(worker()) for _ in range(max(1, cfg.concurrency))]
+            *[asyncio.create_task(worker()) for _ in range(max(1, cfg.concurrency))],
+            return_exceptions=True,
         )
 
     def _emit_phase(self, st: RunState, ev: dict) -> None:
@@ -418,7 +536,7 @@ class Engine:
 
     async def _warmup(self, st: RunState, client: httpx.AsyncClient) -> None:
         cfg = st.cfg
-        n = max(0, int(cfg.warmup))
+        n = max(1, int(cfg.warmup)) if cfg.cache_mode else max(0, int(cfg.warmup))
         if n <= 0:
             return
         self._emit_phase(
@@ -427,7 +545,14 @@ class Engine:
         for i in range(n):
             if st.stop_flag:
                 return
-            await self._fire(st, client, None, warmup=True)
+            task = asyncio.create_task(self._fire(st, client, None, warmup=True))
+            st.active_tasks.add(task)
+            try:
+                await task
+            except asyncio.CancelledError:
+                return
+            finally:
+                st.active_tasks.discard(task)
             self._emit_phase(
                 st, {"type": "phase", "phase": "warmup", "done": i + 1, "total": n}
             )
@@ -437,10 +562,11 @@ class Engine:
         cfg = st.cfg
         await self._warmup(st, client)
         rate = max(0.01, cfg.rate)
+        st.t0_mono = time.perf_counter()
         period = 1.0 / rate
         n_total = int(rate * cfg.duration_s) if cfg.duration_s > 0 else int(rate * 60)
         sem = asyncio.Semaphore(max(1, cfg.concurrency))
-        start = time.perf_counter()
+        start = st.t0_mono
         tasks: list[asyncio.Task] = []
 
         async def one(i: int):
@@ -449,11 +575,20 @@ class Engine:
                 scheduled += random.uniform(-cfg.jitter, cfg.jitter) * period
             now = time.perf_counter()
             if scheduled > now:
-                await asyncio.sleep(scheduled - now)
+                try:
+                    await asyncio.wait_for(
+                        st.stop_event.wait(), timeout=scheduled - now
+                    )
+                except asyncio.TimeoutError:
+                    pass
+            if st.stop_flag:
+                return
             await st.pause_event.wait()
             if st.stop_flag:
                 return
             async with sem:
+                if st.stop_flag:
+                    return
                 await self._handle(st, client, scheduled)
 
         for i in range(n_total):
@@ -470,26 +605,36 @@ class Engine:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _final_summary(self, st: RunState) -> dict:
+        await self.store.flush()
         rows = await self.store.get_samples(st.run_id)
         samples = [_row_to_sample(r) for r in rows]
         if not samples:
             samples = list(st.samples)
-        return summarize(
+        summary = summarize(
             samples,
             st.cfg.slo,
             st.cfg.price_in,
             st.cfg.price_out,
             st.cfg.price_cache_in,
+            st.cfg.price_cache_write,
+            wall_s=(st.ended_mono or time.perf_counter()) - st.t0_mono,
         )
+        summary["sample_scope"] = "full"
+        return summary
 
     def live_summary(self, st: RunState) -> dict:
-        return summarize(
+        summary = summarize(
             list(st.samples),
             st.cfg.slo,
             st.cfg.price_in,
             st.cfg.price_out,
             st.cfg.price_cache_in,
+            st.cfg.price_cache_write,
+            wall_s=max(0.0, time.perf_counter() - st.t0_mono),
         )
+        summary["sample_scope"] = "recent"
+        summary["sample_limit"] = st.samples.maxlen
+        return summary
 
     async def _evaluate_alert(self, st: RunState, summary: dict) -> None:
         from . import notifier
@@ -565,6 +710,7 @@ def _row_to_sample(r: dict) -> SampleRecord:
         in_tokens=r.get("in_tokens") or 0,
         cached_tokens=r.get("cached_tokens") or 0,
         cache_write_tokens=r.get("cache_write_tokens") or 0,
+        cache_reported=bool(r.get("cache_reported")),
         tokens_estimated=bool(r.get("tokens_estimated")),
         status_code=r.get("status_code"),
         ok=bool(r.get("ok")),

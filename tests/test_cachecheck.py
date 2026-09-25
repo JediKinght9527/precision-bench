@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from server.cachecheck import CacheCheckManager, CacheCheckParams, _summarize
@@ -12,11 +14,17 @@ from server.store import Store
 
 def _round(seq, ok=True, ttft=100.0, cached=0, write=0):
     return {
-        "seq": seq, "ok": ok, "status_code": 200 if ok else None,
-        "ttft_ms": ttft if ok else None, "e2e_ms": (ttft or 0) + 50,
-        "cached_tokens": cached, "cache_write_tokens": write,
-        "in_tokens": 2048, "out_tokens": 10,
-        "error_class": None if ok else "timeout", "error_msg": None,
+        "seq": seq,
+        "ok": ok,
+        "status_code": 200 if ok else None,
+        "ttft_ms": ttft if ok else None,
+        "e2e_ms": (ttft or 0) + 50,
+        "cached_tokens": cached,
+        "cache_write_tokens": write,
+        "in_tokens": 2048,
+        "out_tokens": 10,
+        "error_class": None if ok else "timeout",
+        "error_msg": None,
     }
 
 
@@ -63,9 +71,11 @@ def test_summarize_error():
 
 def test_summarize_partial_success_note():
     """部分轮次失败 → 附「仅 N/M 轮成功」提示（§10 数据可信度）。"""
-    rounds = [_round(1, ttft=300.0, write=2048)] + [
-        _round(i, ttft=110.0, cached=2048) for i in range(2, 5)
-    ] + [_round(5, ok=False), _round(6, ok=False)]
+    rounds = (
+        [_round(1, ttft=300.0, write=2048)]
+        + [_round(i, ttft=110.0, cached=2048) for i in range(2, 5)]
+        + [_round(5, ok=False), _round(6, ok=False)]
+    )
     s = _summarize(rounds, P)
     assert s["verdict"] == "valid"
     assert any("4/6" in n for n in s["notes"])
@@ -77,18 +87,21 @@ async def test_cache_check_end_to_end(mock_server, tmp_path):
     store = await _make_store(tmp_path)
     mgr = CacheCheckManager(store)
     target = parse_paste(f"base_url: {mock_server}\napi_key: k\nmodel: gpt-4o")[0]
-    p = CacheCheckParams(rounds=4, prefix_tokens=1024, speedup_threshold=1.5, timeout_s=20)
+    p = CacheCheckParams(
+        rounds=4, prefix_tokens=1024, speedup_threshold=1.5, timeout_s=20
+    )
     out = await mgr.run([target], p)
     assert len(out) == 1
     r = out[0]
     assert r["summary"]["verdict"] == "valid"
     assert len(r["rounds"]) == 4
-    assert r["rounds"][0]["cached_tokens"] == 0          # 第 1 轮写入
+    assert r["rounds"][0]["cached_tokens"] == 0  # 第 1 轮写入
     assert all(x["cached_tokens"] > 0 for x in r["rounds"][1:])  # 之后命中
     # 落库可查
     checks = await store.list_cache_checks()
     assert len(checks) == 1
     detail = await store.get_cache_check(r["check_id"])
+    assert detail is not None
     assert detail["summary"]["verdict"] == "valid"
     assert len(detail["rounds"]) == 4
     await store.close()
@@ -100,17 +113,39 @@ async def test_cache_baseline_flow(mock_server, tmp_path):
     store = await _make_store(tmp_path)
     mgr = CacheCheckManager(store)
     target = parse_paste(f"base_url: {mock_server}\napi_key: k\nmodel: gpt-4o")[0]
-    out = await mgr.run([target], CacheCheckParams(rounds=3, prefix_tokens=512, timeout_s=20))
+    out = await mgr.run(
+        [target], CacheCheckParams(rounds=3, prefix_tokens=512, timeout_s=20)
+    )
     cid = out[0]["check_id"]
     await store.set_cache_baseline(
-        out[0]["base_url"], out[0]["model"], cid, out[0]["summary"]["speedup"]
+        out[0]["base_url"], out[0]["model"], cid, out[0]["summary"]["speedup_min"]
     )
     base = await store.get_cache_baseline(out[0]["base_url"], out[0]["model"])
     assert base and base["check_id"] == cid
-    assert base["speedup"] == out[0]["summary"]["speedup"]
+    assert base["speedup"] == out[0]["summary"]["speedup_min"]
     await store.delete_cache_check(cid)
     assert await store.get_cache_check(cid) is None
     assert await store.get_cache_baseline(out[0]["base_url"], out[0]["model"]) is None
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_cache_job_can_cancel(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    store = await _make_store(tmp_path)
+    mgr = CacheCheckManager(store)
+
+    async def wait_forever(targets, params):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(mgr, "run", wait_forever)
+    job_id = await mgr.start([], P)
+    await asyncio.sleep(0)
+    assert mgr.cancel(job_id) is True
+    await asyncio.sleep(0)
+    job = mgr.get_job(job_id)
+    assert job is not None
+    assert job["status"] == "cancelled"
+    await mgr.shutdown()
     await store.close()
 
 

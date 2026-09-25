@@ -124,8 +124,23 @@ _MODEL_HINTS = (
 )
 _MODEL_TOKEN_RE = re.compile(r"\b([A-Za-z][\w.\-]*\/[\w.\-]+|[A-Za-z][\w.\-]{2,63})\b")
 _HOSTLIKE_RE = re.compile(r"^[\w\-]+(\.[\w\-]+)+$")
-_NOISE_WORDS = {"api", "key", "token", "url", "uri", "http", "https", "sk", "bearer",
-                "authorization", "model", "name", "host", "endpoint", "proxy"}
+_NOISE_WORDS = {
+    "api",
+    "key",
+    "token",
+    "url",
+    "uri",
+    "http",
+    "https",
+    "sk",
+    "bearer",
+    "authorization",
+    "model",
+    "name",
+    "host",
+    "endpoint",
+    "proxy",
+}
 
 _LABELS = {
     "base_url": (
@@ -204,7 +219,9 @@ def _label_map() -> dict[str, str]:
 
 _LABEL_LOOKUP = _label_map()
 # 标签允许多个词（如 "API Key"、"base url"、"模型 名称"）
-_KV_RE = re.compile(r"^\s*([A-Za-z_][\w.\-]*(?:\s+[A-Za-z_][\w.\-]*){0,3}|[\u4e00-\u9fff]{1,8})\s*[:=]\s*(.+?)\s*$")
+_KV_RE = re.compile(
+    r"^\s*([A-Za-z_][\w.\-]*(?:\s+[A-Za-z_][\w.\-]*){0,3}|[\u4e00-\u9fff]{1,8})\s*[:=]\s*(.+?)\s*$"
+)
 
 
 def _norm_label(s: str) -> str | None:
@@ -240,11 +257,47 @@ def _norm_url(u: str) -> str:
     return u.rstrip("/")
 
 
-def detect_provider(base_url: str, model: str = "") -> Provider:
+OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+
+
+def detect_provider(base_url: str, model: str = "", api_key: str = "") -> Provider:
+    """识别协议供应商。优先 openrouter（聚合网关走 OpenAI 兼容协议，claude 也经它）。"""
     blob = f"{base_url} {model}".lower()
+    key = (api_key or "").lower()
+    if "openrouter" in blob or key.startswith("sk-or-"):
+        return Provider.openrouter
     if "anthropic" in blob or "claude" in blob:
         return Provider.anthropic
     return Provider.openai
+
+
+def _apply_openrouter(targets: list[Target], text: str = "") -> list[Target]:
+    """OpenRouter：补默认 base_url；正文提到 openrouter 时整批归类（缺 URL 也能测）。"""
+    blob = (text or "").lower()
+    for t in targets:
+        b = (t.base_url or "").lower()
+        if (
+            t.provider != Provider.openrouter
+            and (
+                "openrouter" in b
+                or "openrouter" in blob
+                or (t.api_key or "").lower().startswith("sk-or-")
+                or "openrouter" in (t.model or "").lower()
+            )
+            and "anthropic" not in b  # 直连 Anthropic 官方时优先 anthropic
+        ):
+            # 正文提到 openrouter 且尚未明确是官方 Anthropic 直连
+            if (
+                "openrouter" in b
+                or (t.api_key or "").lower().startswith("sk-or-")
+                or not t.base_url
+            ):
+                t.provider = Provider.openrouter
+            elif "openrouter" in blob and "api.anthropic.com" not in b:
+                t.provider = Provider.openrouter
+        if t.provider == Provider.openrouter and not t.base_url:
+            t.base_url = OPENROUTER_BASE
+    return targets
 
 
 def _looks_like_model(tok: str) -> bool:
@@ -319,13 +372,22 @@ def _extract_fields(block: str) -> dict[str, list[str]]:
 
     # 4) 名称：只在明确不像 地址/密钥/模型 时才当渠道名
     if not out["name"]:
-        skip = set(out["base_url"]) | set(out["api_key"]) | set(out["model"]) | _NOISE_WORDS
+        skip = (
+            set(out["base_url"])
+            | set(out["api_key"])
+            | set(out["model"])
+            | _NOISE_WORDS
+        )
         blob = " ".join(out["base_url"])
         for m in _MODEL_TOKEN_RE.finditer(rest):
             tok = m.group(1)
-            if (tok in skip or tok in blob or _looks_like_model(tok)
-                    or tok.startswith(("http", "www", "sk-"))
-                    or _HOSTLIKE_RE.match(tok)):
+            if (
+                tok in skip
+                or tok in blob
+                or _looks_like_model(tok)
+                or tok.startswith(("http", "www", "sk-"))
+                or _HOSTLIKE_RE.match(tok)
+            ):
                 continue
             if re.search(r"[\u4e00-\u9fff]", tok) or len(tok) <= 24:
                 add("name", tok)
@@ -367,12 +429,26 @@ def _targets_from_fields(f: dict[str, list[str]], block: str) -> list[Target]:
         name = names[0] if names else ""
         key = keys[0] if keys else ""
         if len(models) > 1:
-            return [Target(name=_label(name, key, m, "", i, len(models)),
-                           provider=detect_provider("", m), base_url="", api_key=key, model=m)
-                    for i, m in enumerate(models)]
+            return [
+                Target(
+                    name=_label(name, key, m, "", i, len(models)),
+                    provider=detect_provider("", m, key),
+                    base_url="",
+                    api_key=key,
+                    model=m,
+                )
+                for i, m in enumerate(models)
+            ]
         model = models[0] if models else ""
-        return [Target(name=_label(name, key, model, "", 0, 1),
-                       provider=detect_provider("", model), base_url="", api_key=key, model=model)]
+        return [
+            Target(
+                name=_label(name, key, model, "", 0, 1),
+                provider=detect_provider("", model, key),
+                base_url="",
+                api_key=key,
+                model=model,
+            )
+        ]
 
     urls = [_norm_url(u) for u in urls]
     name = names[0] if names else ""
@@ -380,35 +456,71 @@ def _targets_from_fields(f: dict[str, list[str]], block: str) -> list[Target]:
     # 一个 url + 多个 key → 每个 key 一个目标（密钥前缀天然不同）
     if len(urls) == 1 and len(keys) > 1 and len(models) <= 1:
         model = models[0] if models else ""
-        return [Target(name=_label(name, k, model, "", 0, 1),
-                       provider=detect_provider(urls[0], model), base_url=urls[0], api_key=k, model=model)
-                for i, k in enumerate(keys)]
+        return [
+            Target(
+                name=_label(name, k, model, "", 0, 1),
+                provider=detect_provider(urls[0], model, k),
+                base_url=urls[0],
+                api_key=k,
+                model=model,
+            )
+            for i, k in enumerate(keys)
+        ]
 
     # 多个 url + 等量 key → 一一配对
     if len(urls) == len(keys) and len(urls) > 1:
         hosts = [_host(u) for u in urls]
-        return [Target(name=_label(name, keys[i], models[i] if i < len(models) else (models[0] if models else ""),
-                                   hosts[i], i, len(urls)),
-                       provider=detect_provider(urls[i], models[i] if i < len(models) else (models[0] if models else "")),
-                       base_url=urls[i], api_key=keys[i],
-                       model=(models[i] if i < len(models) else (models[0] if models else "")))
-                for i in range(len(urls))]
+        return [
+            Target(
+                name=_label(
+                    name,
+                    keys[i],
+                    models[i] if i < len(models) else (models[0] if models else ""),
+                    hosts[i],
+                    i,
+                    len(urls),
+                ),
+                provider=detect_provider(
+                    urls[i],
+                    models[i] if i < len(models) else (models[0] if models else ""),
+                    keys[i],
+                ),
+                base_url=urls[i],
+                api_key=keys[i],
+                model=(models[i] if i < len(models) else (models[0] if models else "")),
+            )
+            for i in range(len(urls))
+        ]
 
     # 一个 url + 多个 model → 每个模型一个目标
     if len(urls) == 1 and len(models) > 1:
         key = keys[0] if keys else ""
-        return [Target(name=_label(name, key, m, "", 0, 1),
-                       provider=detect_provider(urls[0], m), base_url=urls[0], api_key=key, model=m)
-                for i, m in enumerate(models)]
+        return [
+            Target(
+                name=_label(name, key, m, "", 0, 1),
+                provider=detect_provider(urls[0], m, key),
+                base_url=urls[0],
+                api_key=key,
+                model=m,
+            )
+            for i, m in enumerate(models)
+        ]
 
     # 一般情况：每个 url 一个目标，共享首个 key / model
     key = keys[0] if keys else ""
     model = models[0] if models else ""
     hosts = [_host(u) for u in urls]
     total = len(urls) if len(set(hosts)) < len(hosts) else 1
-    return [Target(name=_label(name, key, model, hosts[i], i, total),
-                   provider=detect_provider(u, model), base_url=u, api_key=key, model=model)
-            for i, u in enumerate(urls)]
+    return [
+        Target(
+            name=_label(name, key, model, hosts[i], i, total),
+            provider=detect_provider(u, model, key),
+            base_url=u,
+            api_key=key,
+            model=model,
+        )
+        for i, u in enumerate(urls)
+    ]
 
 
 # --------------------------------------------------------------------------
@@ -490,7 +602,6 @@ def _split_blocks(text: str) -> list[str]:
     return ["\n".join(b) for b in blocks if "\n".join(b).strip()]
 
 
-
 def _delim(line: str) -> str:
     for d in ("\t", "|", ","):
         if line.count(d) >= 2:
@@ -517,8 +628,13 @@ def _records_from_text(text: str) -> list:
         d = _delim(ln)
         if d and len(_split_row(ln)) >= 2:
             j, grp = i, []
-            while j < len(lines) and _delim(lines[j]) == d and len(_split_row(lines[j])) >= 2:
-                grp.append(lines[j]); j += 1
+            while (
+                j < len(lines)
+                and _delim(lines[j]) == d
+                and len(_split_row(lines[j])) >= 2
+            ):
+                grp.append(lines[j])
+                j += 1
             if len(grp) >= 2:
                 flush()
                 for t in _parse_table("\n".join(grp)):
@@ -563,7 +679,7 @@ def parse_paste(text: str) -> list[Target]:
     # 1) 整体 JSON
     j = _try_json(clean)
     if j:
-        return _dedupe(j)
+        return _dedupe(_apply_openrouter(j, clean))
 
     # 2) 逐记录解析（表格 / curl / 键值 / 裸词混排都能拆）
     out: list[Target] = []
@@ -573,10 +689,10 @@ def parse_paste(text: str) -> list[Target]:
             continue
         j = _try_json(rec)
         if j:
-            out.extend(j)
+            out.extend(_apply_openrouter(j, rec))
             continue
         out.extend(_targets_from_fields(_extract_fields(rec), rec))
-    return _dedupe(out)
+    return _dedupe(_apply_openrouter(out, clean))
 
 
 def _try_json(text: str) -> list[Target] | None:
@@ -662,13 +778,18 @@ def _parse_curl(block: str) -> Target | None:
             key = v
     model = str(body.get("model", "")) if isinstance(body, dict) else ""
     base = _norm_url(url)
-    return Target(
-        name=model or "target",
-        provider=detect_provider(base, model),
-        base_url=base,
-        api_key=key,
-        model=model,
-    )
+    return _apply_openrouter(
+        [
+            Target(
+                name=model or "target",
+                provider=detect_provider(base, model, key),
+                base_url=base,
+                api_key=key,
+                model=model,
+            )
+        ],
+        block,
+    )[0]
 
 
 def _dedupe(targets: list[Target]) -> list[Target]:

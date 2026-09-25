@@ -110,12 +110,31 @@ def test_parse_group_task_expands_leaves(tmp_path):
         L.TASKS.pop("grp", None)
 
 
+def test_item_passed_supports_lm_eval_logprob_metrics():
+    assert L._item_passed({"acc": 1.0, "metrics": ["acc"]}, "exact_match")
+    assert L._item_passed({"acc_norm": 1.0, "metrics": ["acc_norm"]}, "exact_match")
+    assert not L._item_passed({"acc": 0.0, "metrics": ["acc"]}, "exact_match")
+
+
+def test_limit_zero_means_full_dataset(tmp_path):
+    from server.schemas import Provider, Target
+
+    t = Target(provider=Provider.openai, base_url="http://h", api_key="sk-x", model="m")
+    cmd = L.build_cmd(t, ["gsm8k"], {"limit": 0}, tmp_path)
+    assert "--limit" not in cmd
+
+
 def test_build_cmd_puts_output_in_run_dir(tmp_path):
     """输出必须落在本次运行的独立目录，避免历史结果互相污染。"""
     from server.schemas import Provider, Target
 
-    t = Target(name="m", provider=Provider.openai, base_url="http://h",
-               api_key="sk-x", model="gpt-4o")
+    t = Target(
+        name="m",
+        provider=Provider.openai,
+        base_url="http://h",
+        api_key="sk-x",
+        model="gpt-4o",
+    )
     cmd = L.build_cmd(t, ["gsm8k"], {"limit": 5, "num_concurrent": 2}, tmp_path)
     assert cmd[0].endswith("lm-eval") and "run" in cmd
     assert str(tmp_path / "result.json") in cmd

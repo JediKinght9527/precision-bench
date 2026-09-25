@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="theme-color" content="#000000" />
+<meta name="theme-color" content="#0e1014" />
 <meta name="build" content="__BUILD__" />
 <title>LLM Bench · 中转 API 性能 / 降智检测</title>
 <link rel="icon" href="/static/favicon.svg" />
@@ -14,11 +14,29 @@
   <!-- ============ 左导轨 ============ -->
   <nav class="rail">
     <div class="rail-brand">
-      <div class="rail-logo" title="LLM Bench">
-        <img class="rail-logo-img" src="/static/logo-rail.png" width="21" height="21" alt="" />
+      <div class="rail-logo" title="LLM Bench" aria-hidden="true">
+        <!-- 检定仪表盘：琥珀指针 + 刻度，与 Precision Bench 同语言 -->
+        <svg class="rail-logo-svg" viewBox="0 0 64 64" width="28" height="28">
+          <rect width="64" height="64" rx="14" fill="#12151b"/>
+          <circle cx="32" cy="32" r="22" fill="none" stroke="#2a3140" stroke-width="3"/>
+          <circle cx="32" cy="32" r="22" fill="none" stroke="#f0b429" stroke-width="3"
+                  stroke-dasharray="44 94" stroke-dashoffset="0" stroke-linecap="round"
+                  transform="rotate(-90 32 32)"/>
+          <!-- 刻度 -->
+          <g stroke="#6b7385" stroke-width="2" stroke-linecap="round">
+            <path d="M32 8v5"/><path d="M32 51v5"/><path d="M8 32h5"/><path d="M51 32h5"/>
+            <path d="M14.5 14.5l3.5 3.5" opacity=".7"/><path d="M46 46l3.5 3.5" opacity=".7"/>
+            <path d="M49.5 14.5L46 18" opacity=".7"/><path d="M18 46l-3.5 3.5" opacity=".7"/>
+          </g>
+          <!-- 指针 -->
+          <path d="M32 32L44 20" stroke="#f0b429" stroke-width="3" stroke-linecap="round"/>
+          <circle cx="32" cy="32" r="4" fill="#f0f2f5"/>
+          <circle cx="32" cy="32" r="1.6" fill="#12151b"/>
+        </svg>
       </div>
       <div class="rail-brand-tx"><b>LLM Bench</b><span>中转 API 检定台</span></div>
     </div>
+
     <div class="rail-cap">检测</div>
     <button class="rail-item on" data-view="perf" title="性能压测" aria-label="性能压测">
       <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 12h4l2 6 4-14 2 8h6"/></svg>
@@ -28,12 +46,43 @@
       <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
       <span>降智检测</span>
     </button>
+
+    <div class="rail-cap perfonly">工作区</div>
+    <button class="rail-item perfonly" data-jump-tab="runs" title="运行记录" aria-label="运行记录">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+      <span>运行记录</span>
+    </button>
+    <button class="rail-item perfonly" data-jump-tab="req" title="逐请求明细" aria-label="逐请求明细">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+      <span>逐请求</span>
+    </button>
+    <button class="rail-item perfonly" data-jump-tab="cmp" title="渠道对比" aria-label="渠道对比">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19V8"/></svg>
+      <span>对比表</span>
+    </button>
+    <button class="rail-item perfonly" data-jump-tab="log" title="运行日志" aria-label="运行日志">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 19l5-5-5-5M12 19h8"/></svg>
+      <span>日志</span>
+    </button>
+
     <div class="rail-spacer"></div>
+
+    <!-- 状态铭牌：仪表面板感 -->
+    <div class="rail-plate" title="服务状态">
+      <div class="rp-row"><span class="led" id="railLed"></span><span id="railHealth">…</span></div>
+      <div class="rp-row rp-meta"><span>运行</span><b id="railRuns">0</b></div>
+      <div class="rp-row rp-meta"><span>错误</span><b id="railErrs">0</b></div>
+    </div>
+
     <div class="rail-cap">工具</div>
     <button class="rail-item" id="btnPaletteRail" title="搜索 (⌘K)" aria-label="搜索 (⌘K)">
       <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
       <span>搜索</span>
       <kbd>⌘K</kbd>
+    </button>
+    <button class="rail-item" id="btnGlossaryRail" title="指标口径说明" aria-label="指标口径说明">
+      <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/></svg>
+      <span>口径说明</span>
     </button>
     <div class="rail-foot" id="railBuild" title="构建版本"></div>
   </nav>
@@ -49,7 +98,7 @@
             <span class="blk-meta" id="chanCount">未解析</span>
           </div>
           <textarea id="paste" aria-label="粘贴供应商配置" placeholder="把供应商给的任何东西粘进来：地址、密钥、模型名、JSON、curl、表格、一行一个渠道……"></textarea>
-          <div class="btnrow">
+          <div class="btnrow target-actions">
             <button id="btnParse" class="primary">识别配置</button>
             <button id="btnProbe" class="ghost">探活测速</button>
             <button id="btnModels" class="ghost">拉模型</button>
@@ -72,15 +121,29 @@
               <div><label>并发</label><input id="concurrency" type="number" value="2" min="1" max="256" /></div>
               <div><label>总请求数</label><input id="request_count" type="number" value="100" min="1" /></div>
             </div>
-            <div class="row">
-              <div><label>定频 rate（req/s）</label><input id="rate" type="number" value="5" min="0.1" step="0.5" /></div>
-              <div><label>时长（秒）</label><input id="duration_s" type="number" value="60" min="1" /></div>
-            </div>
-            <div class="row">
-              <div><label>预热次数</label><input id="warmup" type="number" value="3" min="0" /></div>
-              <div><label>超时（秒）</label><input id="timeout_s" type="number" value="120" min="1" /></div>
-            </div>
-          </div>
+             <div class="row">
+               <div><label>定频 rate（req/s）</label><input id="rate" type="number" value="5" min="0.1" step="0.5" /></div>
+               <div><label>时长（秒）</label><input id="duration_s" type="number" value="60" min="1" /></div>
+             </div>
+             <div class="row">
+               <div><label>爬升时长（秒）</label><input id="ramp_s" type="number" value="0" min="0" step="1" /></div>
+               <div><label>冷却时长（秒）</label><input id="cooldown_s" type="number" value="0" min="0" step="1" /></div>
+             </div>
+             <div class="row">
+               <div><label>预热次数</label><input id="warmup" type="number" value="3" min="0" /></div>
+               <div><label>并发爬升（worker/s）</label><input id="ramp_rate" type="number" value="0" min="0" step="0.5" /></div>
+             </div>
+             <div class="row">
+               <div><label>超时（秒）</label><input id="timeout_s" type="number" value="120" min="1" /></div>
+              </div>
+             <div class="preset-box">
+               <div class="row">
+                 <div><label>测试方案</label><input id="preset_name" type="text" placeholder="例如：日常巡检" /></div>
+                 <div class="btnrow" style="align-items:end"><button id="btnSavePreset" class="mini">保存</button><button id="btnLoadPreset" class="mini ghost">载入</button></div>
+               </div>
+               <div id="presetList" class="preset-list"></div>
+             </div>
+           </div>
         </details>
 
         <details class="sect">
@@ -91,8 +154,9 @@
               <div><label>间隔抖动 0~1</label><input id="jitter" type="number" value="0" min="0" max="1" step="0.05" /></div>
             </div>
             <label class="switch"><input type="checkbox" id="stream" checked />流式输出（测首字延迟必须开）</label>
-            <label class="switch"><input type="checkbox" id="connection_reuse" checked />连接复用 keep-alive</label>
-            <label class="switch"><input type="checkbox" id="randomize" checked />随机化请求，降低被识别概率</label>
+             <label class="switch"><input type="checkbox" id="connection_reuse" checked />连接复用 keep-alive</label>
+             <label class="switch"><input type="checkbox" id="verify_tls" checked />验证 TLS 证书</label>
+             <label class="switch"><input type="checkbox" id="randomize" checked />随机化请求，降低被识别概率</label>
             <label>代理地址（留空则直连）</label>
             <input id="proxy" type="text" placeholder="http://127.0.0.1:7890" />
           </div>
@@ -101,22 +165,34 @@
         <details class="sect">
           <summary>请求内容</summary>
           <div class="sect-bd">
-            <div class="row">
-              <div><label>Prompt 来源</label>
-                <select id="prompt_mode">
-                  <option value="tiny">极短（hi）</option>
-                  <option value="sample">按输入长度生成</option>
-                  <option value="custom">自定义</option>
-                </select>
-              </div>
-              <div><label>输入 tokens</label><input id="input_tokens" type="number" value="128" /></div>
-            </div>
-            <label>自定义 prompt</label>
-            <textarea id="prompt" style="min-height:56px" placeholder="仅 Prompt 来源选「自定义」时生效"></textarea>
-            <div class="row">
-              <div><label>max_tokens</label><input id="max_tokens" type="number" value="256" /></div>
-              <div><label>temperature</label><input id="temperature" type="number" value="0" step="0.1" /></div>
-            </div>
+             <div class="row">
+               <div><label>Prompt 来源</label>
+                 <select id="prompt_mode">
+                   <option value="tiny">极短（hi）</option>
+                   <option value="sample">按输入长度生成</option>
+                   <option value="custom">自定义</option>
+                 </select>
+               </div>
+               <div><label>输入长度分布</label>
+                 <select id="input_dist">
+                   <option value="fixed">固定</option>
+                   <option value="uniform">均匀</option>
+                   <option value="normal">正态</option>
+                 </select>
+               </div>
+             </div>
+             <div class="row">
+               <div><label>输入 tokens</label><input id="input_tokens" type="number" value="128" /></div>
+               <div><label>top_p（可选）</label><input id="top_p" type="number" value="" min="0" max="1" step="0.05" placeholder="默认不设置" /></div>
+             </div>
+             <label>自定义 prompt</label>
+             <textarea id="prompt" style="min-height:56px" placeholder="仅 Prompt 来源选「自定义」时生效"></textarea>
+             <label>System prompt（可选）</label>
+             <textarea id="system_prompt" style="min-height:48px" placeholder="用于模拟稳定的系统提示词与缓存前缀"></textarea>
+             <div class="row">
+               <div><label>max_tokens</label><input id="max_tokens" type="number" value="256" /></div>
+               <div><label>temperature</label><input id="temperature" type="number" value="0" step="0.1" /></div>
+             </div>
           </div>
         </details>
 
@@ -135,8 +211,10 @@
               <div><label>输入 ¥ / 百万 token</label><input id="price_in" type="number" value="0" step="0.01" /></div>
               <div><label>输出 ¥ / 百万 token</label><input id="price_out" type="number" value="0" step="0.01" /></div>
             </div>
-            <label>缓存命中 ¥ / 百万 token（留空=与输入同价）</label>
-            <input id="price_cache_in" type="number" value="0" step="0.01" />
+             <label>缓存命中 ¥ / 百万 token（留空=与输入同价）</label>
+             <input id="price_cache_in" type="number" value="0" step="0.01" />
+             <label>缓存写入 ¥ / 百万 token（留空=与输入同价）</label>
+             <input id="price_cache_write" type="number" value="0" step="0.01" />
           </div>
         </details>
 
@@ -144,14 +222,25 @@
           <summary>缓存检测</summary>
           <div class="sect-bd">
             <div class="hint" style="margin:0 0 6px">同一长前缀串行发 N 次：第 1 次写缓存（miss），后续应命中。加速比达标才算「缓存有效」，能揪出上报命中但不加速的假缓存。</div>
-            <div class="row">
-              <div><label>轮数（1 次写入 + 命中）</label><input id="c_rounds" type="number" value="6" min="2" max="20" /></div>
-              <div><label>前缀长度（tokens）</label><input id="c_prefix" type="number" value="2048" min="64" /></div>
-            </div>
-            <div class="row">
-              <div><label>加速比阈值（≥ 判有效）</label><input id="c_speedup" type="number" value="1.5" step="0.1" /></div>
-            </div>
-            <div class="hint">注意：前缀长度需达到渠道的最低可缓存门槛（OpenAI 1024 / Anthropic 依模型 2048+），否则可能命中但不加速。</div>
+             <div class="row">
+               <div><label>轮数（1 次写入 + 命中）</label><input id="c_rounds" type="number" value="6" min="2" max="20" /></div>
+               <div><label>前缀长度（tokens）</label><input id="c_prefix" type="number" value="2048" min="64" /></div>
+             </div>
+             <div class="row">
+               <div><label>渠道门槛预设</label>
+                 <select id="c_preset">
+                   <option value="">自定义</option>
+                   <option value="openai">OpenAI 兼容 · 1024</option>
+                   <option value="qwen">Qwen / GLM · 1024</option>
+                   <option value="deepseek">DeepSeek · 1024</option>
+                   <option value="kimi">Kimi · 1024</option>
+                   <option value="anthropic">Anthropic · 2048</option>
+                 </select>
+               </div>
+               <div><label>加速比阈值（≥ 判有效）</label><input id="c_speedup" type="number" value="1.5" step="0.1" /></div>
+             </div>
+             <label class="switch"><input type="checkbox" id="cache_mode" />缓存友好模式（固定前缀 + 至少 1 次预热）</label>
+             <div class="hint">注意：前缀长度需达到渠道的最低可缓存门槛（OpenAI 1024 / Anthropic 依模型 2048+），否则可能命中但不加速。缓存友好模式会关闭请求随机化，让预热请求为正式样本准备缓存。</div>
           </div>
         </details>
 
@@ -252,21 +341,23 @@
           </div>
         </details>
       </div>
+    </div>
 
-      <div class="side-actions">
-        <div id="side-actions-perf">
-          <button id="btnStart" class="primary block">开始测试</button>
-          <div class="row" style="margin-top:6px">
-            <button id="btnPause">暂停</button>
-            <button id="btnStop" class="danger">停止</button>
-          </div>
-          <div class="hint"><kbd>⌘Enter</kbd> 开始　<kbd>⌘K</kbd> 命令面板　<kbd>⌘B</kbd> 收起</div>
+    <div class="side-actions">
+      <div id="side-actions-perf" class="transport" data-state="idle">
+        <button id="btnStart" class="primary block">开始测试</button>
+        <div class="transport-secondary">
+          <button id="btnPause">暂停</button>
+          <button id="btnStop" class="danger">停止测试</button>
         </div>
-        <div id="side-actions-bench" hidden>
-          <button id="btnBenchRun" class="primary block">开始检测</button>
-          <div class="row" style="margin-top:6px"><button id="btnBenchStop" class="danger">停止</button></div>
-          <div class="hint">同一渠道与模型首次运行会自动记为基线，之后每次都与它对比。<br /><kbd>⌘Enter</kbd> 开始　<kbd>⌘K</kbd> 命令面板　<kbd>⌘B</kbd> 收起</div>
+        <div class="hint"><kbd>⌘Enter</kbd> 开始　<kbd>⌘K</kbd> 命令面板　<kbd>⌘B</kbd> 收起</div>
+      </div>
+      <div id="side-actions-bench" class="transport" data-state="idle" hidden>
+        <button id="btnBenchRun" class="primary block">开始检测</button>
+        <div class="transport-secondary">
+          <button id="btnBenchStop" class="danger">停止检测</button>
         </div>
+        <div class="hint">同一渠道与模型首次运行会自动记为基线，之后每次都与它对比。<br /><kbd>⌘Enter</kbd> 开始　<kbd>⌘K</kbd> 命令面板　<kbd>⌘B</kbd> 收起</div>
       </div>
     </div>
   </aside>
@@ -327,6 +418,10 @@
       </div>
 
       <div id="perfDash" class="dash" hidden>
+        <div class="report-strip">
+          <div><b>渠道验真</b><span>把性能、缓存与降智证据整理成可交付报告</span></div>
+          <button id="btnVerifyReport" class="ghost mini">生成验真报告</button>
+        </div>
         <section class="summary">
           <div class="verdict-block" id="verdictBlock">
             <div class="vb-hud">
@@ -464,7 +559,7 @@
 
     <!-- 降智检测 -->
     <div id="view-bench" class="view" hidden>
-      <div id="b-verdict" class="verdict"></div>
+      <div id="b-verdict" class="verdict" aria-live="polite"></div>
       <section class="panel-grid bench-grid">
         <div class="panel w6h2" data-panel="dims">
           <header class="panel-hd"><h3>各维度得分</h3><div class="panel-menu">
@@ -556,6 +651,16 @@
     }
     document.querySelectorAll('.rail-item[data-view]').forEach(a => {
       a.addEventListener('click', () => { switchView(a.dataset.view); history.replaceState(null, '', a.dataset.view === 'perf' ? '/' : '#bench'); });
+    });
+    /* 侧栏工作区：跳到底部面板对应标签页 */
+    document.querySelectorAll('.rail-item[data-jump-tab]').forEach(a => {
+      a.addEventListener('click', () => {
+        switchView('perf');
+        const tab = document.querySelector(`#view-perf .tabs button[data-tab="${a.dataset.jumpTab}"]`);
+        if (tab) tab.click();
+        const bp = document.querySelector('#view-perf .bottom-panel');
+        if (bp) bp.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
     });
     window.addEventListener('hashchange', () => switchView(location.hash === '#bench' ? 'bench' : 'perf'));
     window.__switchView = switchView;
