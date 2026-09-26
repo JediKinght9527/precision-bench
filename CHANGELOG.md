@@ -6,6 +6,20 @@
 
 ### Added
 
+- 界面真实截图七张（性能压测、降智检测、缓存检测、逐请求、对比表、运行记录、日志）与 `docs/screenshots.md` 图集。
+- `docs/DESIGN.md`：设计规范从根目录移入文档目录；首屏改用聚焦裁切图。
+- 发布首个 GitHub Release（v0.3.0），release notes 附实测数据。
+- CI 上传 `coverage.xml` 产物并尝试 Codecov 上传。
+
+### Changed
+
+- 产品名统一为 Precision Bench：界面标题与左栏徽标、浏览器通知、Markdown 报告标题、告警文案。
+- 顶栏与左栏的「运行 N」改为「记录」：该数字是内存中保留的运行记录数，原标签易被误读为正在运行数量。
+- 移除手写的 tests / coverage 静态徽章（数字会随代码过期），改用 CI、release、license、python 四枚。
+- `CITATION.cff` 移除（未发布到 Zenodo，无实际用途）。
+
+### Added
+
 - 新增英文 README、中文 `README.zh-CN.md` 与品牌 Logo，补充许可证、贡献指南、PR 模板等基础文件。
 - 支持 Docker 运行：多阶段 `Dockerfile`（非 root、数据落在具名卷）、`docker-compose.yml`，CI 增加镜像构建。
 - 渠道验真报告：汇总性能、缓存、降智、SLO 和成本证据，可复制/下载 Markdown。
