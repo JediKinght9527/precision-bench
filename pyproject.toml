@@ -1,5 +1,5 @@
 [project]
-name = "llm-bench"
+name = "precision-bench"
 version = "0.3.0"
 description = "Load testing, cache verification, and degradation detection for LLM relay APIs"
 readme = "README.md"
@@ -15,6 +15,53 @@ dependencies = [
     "pydantic>=2.7",
     "apscheduler>=3.10",
     "lm-eval[api]>=0.4.13",
+]
+
+[project.urls]
+Homepage = "https://github.com/JediKinght9527/precision-bench"
+Repository = "https://github.com/JediKinght9527/precision-bench"
+Issues = "https://github.com/JediKinght9527/precision-bench/issues"
+Changelog = "https://github.com/JediKinght9527/precision-bench/blob/main/CHANGELOG.md"
+
+[project.scripts]
+precision-bench = "server.__main__:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["server"]
+# 前端静态资源随包分发：运行时按 ROOT/web 解析
+force-include = { "web" = "web" }
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/server",
+    "/web",
+    "/docs",
+    "/assets",
+    "/scripts",
+    "/tests",
+    "/run.sh",
+    "/run_mock.sh",
+    "/service.sh",
+    "/docker-compose.yml",
+    "/Dockerfile",
+    "/README.md",
+    "/README.zh-CN.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/SECURITY.md",
+    "/CONTRIBUTING.md",
+    "/CODE_OF_CONDUCT.md",
 ]
 
 [dependency-groups]

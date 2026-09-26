@@ -6,7 +6,10 @@
 
 <p align="center">
   <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/JediKinght9527/precision-bench/ci.yml?branch=main&label=CI">
+  <img alt="coverage" src="https://img.shields.io/codecov/c/github/JediKinght9527/precision-bench?label=coverage">
   <img alt="release" src="https://img.shields.io/github/v/release/JediKinght9527/precision-bench?label=release">
+  <img alt="release date" src="https://img.shields.io/github/release-date/JediKinght9527/precision-bench?label=released">
+  <img alt="last commit" src="https://img.shields.io/github/last-commit/JediKinght9527/precision-bench?label=last%20commit">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-f0b642">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-7395be">
 </p>

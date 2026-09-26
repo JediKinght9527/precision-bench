@@ -1,0 +1,55 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Build and verify only, do not upload
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      # trusted publishing (OIDC) — no API token stored in the repository
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Verify metadata
+        run: |
+          uv run --with twine --from twine twine check dist/*
+          uv run --with twine --from twine twine upload --repository-url https://test.pypi.org/legacy/ dist/* --skip-existing
+
+      - name: Upload to PyPI
+        if: ${{ github.event_name == 'release' || inputs.dry-run == false }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  verify:
+    runs-on: ubuntu-latest
+    needs: publish
+    steps:
+      - name: Install from PyPI
+        run: |
+          uv venv
+          uv pip install precision-bench
+          uv run precision-bench --help

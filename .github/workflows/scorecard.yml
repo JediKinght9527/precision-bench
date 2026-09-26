@@ -1,0 +1,47 @@
+name: Scorecard
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: "17 4 * * 1"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@master
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # 上传到 scorecard.dev 需要仓库 secret SCORECARD_TOKEN；
+          # 未配置时只在 job summary 里出报告，不阻塞 CI。
+          publish_results: ${{ secrets.SCORECARD_TOKEN != '' }}
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+
+      - name: Add job summary
+        if: ${{ always() }}
+        uses: ossf/scorecard-action@master
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_summary: true
+          publish_results: false

@@ -6,6 +6,8 @@
 
 ### Added
 
+- 支持以 `precision-bench` 发布到 PyPI：新增 `precision-bench` 命令行入口（`--host/--port/--db/--reload`）、hatchling 打包配置（前端资源随包分发）、GitHub Release 触发的发布工作流与 Scorecard 分析工作流。
+- README 增加 Codecov 覆盖率、last commit、release date 徽章。
 - 界面真实截图七张（性能压测、降智检测、缓存检测、逐请求、对比表、运行记录、日志）与 `docs/screenshots.md` 图集。
 - `docs/DESIGN.md`：设计规范从根目录移入文档目录；首屏改用聚焦裁切图。
 - 发布首个 GitHub Release（v0.3.0），release notes 附实测数据。
