@@ -7,7 +7,8 @@ on:
   push:
     branches: [main]
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   analysis:
@@ -16,8 +17,8 @@ jobs:
     permissions:
       security-events: write
       contents: read
-      # 仅在配置 SCORECARD_TOKEN（上传到 scorecard.dev）时才需要
-      id-token: ${{ secrets.SCORECARD_TOKEN != '' && 'write' || 'none' }}
+      # 需要把结果上传到 scorecard.dev 时才可改为 write
+      id-token: none
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

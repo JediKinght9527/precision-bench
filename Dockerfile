@@ -16,7 +16,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-project
 
 # 只拷贝运行必需内容，避免 data/、.venv/、.shots/ 进入镜像
-COPY pyproject.toml uv.lock ./
+# LICENSE 与 README.md 是构建元数据（license / readme 字段）的来源，缺一不可
+COPY pyproject.toml uv.lock LICENSE README.md ./
 COPY server ./server
 COPY web ./web
 

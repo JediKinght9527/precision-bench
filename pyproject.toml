@@ -48,7 +48,6 @@ include = [
     "/web",
     "/docs",
     "/assets",
-    "/scripts",
     "/tests",
     "/run.sh",
     "/run_mock.sh",
