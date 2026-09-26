@@ -6,7 +6,11 @@
 
 ## Reporting a vulnerability
 
-请不要在公开 Issue 中提交漏洞细节。使用 GitHub 仓库的 **Security → Report a vulnerability** 私下报告，或在修复前通过 maintainer 提供的安全渠道联系。
+请不要在公开 Issue 中提交漏洞细节。使用 GitHub 私下报告漏洞：
+
+- **Security → Report a vulnerability**（仓库右侧栏）：https://github.com/JediKinght9527/precision-bench/security/advisories/new
+
+修复完成前请勿公开披露细节，我们会先确认问题并给出修复或缓解方案。
 
 请尽量包含：
 

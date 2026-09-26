@@ -1,12 +1,25 @@
 version: 2
 updates:
+  # 依赖与 lockfile
   - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      dev-dependencies:
+        dependency-type: development
+
+  # Actions 按 SHA 固定，需要 dependabot 持续升级这些 pin
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: monthly
+      interval: weekly
     open-pull-requests-limit: 5
+
+  # CI 里镜像与仓库同源
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
