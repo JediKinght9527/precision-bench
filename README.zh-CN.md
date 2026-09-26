@@ -6,8 +6,7 @@
 
 <p align="center">
   <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/JediKinght9527/precision-bench/ci.yml?branch=main&label=CI">
-  <img alt="tests" src="https://img.shields.io/badge/tests-88%20passed-5dd39e">
-  <img alt="coverage" src="https://img.shields.io/badge/coverage-64%25-7395be">
+  <img alt="release" src="https://img.shields.io/github/v/release/JediKinght9527/precision-bench?label=release">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-f0b642">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-7395be">
 </p>
@@ -16,7 +15,7 @@
   <a href="README.md">English</a> · <b>简体中文</b> · <a href="docs/demo.md">Demo</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="CHANGELOG.md">Changelog</a> · <a href="SECURITY.md">Security</a>
 </p>
 
-<img src="docs/assets/dashboard.png" alt="Precision Bench 仪表盘" width="100%">
+<img src="docs/assets/hero.png" alt="Precision Bench 仪表盘" width="100%">
 
 第三方 **LLM 中转 API** 性能、稳定性与质量检定平台。粘贴供应商给的 `base_url + api_key + model` 即可测，输出可复算的原始指标、波形、性能判定、缓存验证与降智检测结果。
 
@@ -65,7 +64,7 @@
 
 ---
 
-> 前端设计与实现约定见 **[DESIGN.md](./DESIGN.md)**（令牌、组件六态、图表规范、无障碍硬性要求、验收清单）。
+> 前端设计与实现约定见 **[docs/DESIGN.md](./docs/DESIGN.md)**（令牌、组件六态、图表规范、无障碍硬性要求、验收清单）。
 
 ## 界面
 
@@ -75,6 +74,28 @@
 |---|---|
 | **性能压测** | 延迟 / 吞吐 / 稳定性 波形图、探活测速、拉模型、成本、定时巡检 |
 | **降智检测** | 能力探测、自动判分、基线对比、降智判定 |
+
+工作区四个页签：**运行记录 / 逐请求 / 对比表 / 日志**。
+
+### 截图
+
+降智检测（八维度判分 + 基线对比）：
+
+![降智检测](docs/screenshots/degradation.png)
+
+缓存检测面板（轮数 / 前缀长度 / 渠道门槛 / 加速比阈值 / 缓存友好模式）：
+
+![缓存检测](docs/screenshots/cache-check.png)
+
+多渠道横评：
+
+![对比表](docs/screenshots/compare.png)
+
+逐请求样本明细：
+
+![逐请求](docs/screenshots/requests.png)
+
+全部视图截图见 [docs/screenshots.md](docs/screenshots.md)。
 
 - **可折叠配置栏**：`⌘/Ctrl+B` 或顶栏按钮收起；点「开始测试」后自动收起，图表占满全宽（状态记忆）
 - **仪表盘栅格**：主次分明——E2E 主图占 8×2 大位，TTFT/TPOT 右侧堆叠，吞吐/分布、热力/错误按 8+4 配对，横评通栏；面板随窗口自适应（ResizeObserver）

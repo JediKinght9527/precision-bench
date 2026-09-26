@@ -19,3 +19,5 @@ data/lm_eval/
 *.log
 .DS_Store
 .shots/
+coverage.xml
+htmlcov/

@@ -6,8 +6,7 @@
 
 <p align="center">
   <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/JediKinght9527/precision-bench/ci.yml?branch=main&label=CI">
-  <img alt="tests" src="https://img.shields.io/badge/tests-88%20passed-5dd39e">
-  <img alt="coverage" src="https://img.shields.io/badge/coverage-64%25-7395be">
+  <img alt="release" src="https://img.shields.io/github/v/release/JediKinght9527/precision-bench?label=release">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-f0b642">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-7395be">
 </p>
@@ -21,7 +20,23 @@
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
-<img src="docs/assets/dashboard.png" alt="Precision Bench dashboard" width="100%">
+<img src="docs/assets/hero.png" alt="Precision Bench dashboard" width="100%">
+
+## Screenshots
+
+Degradation detection — eight scored dimensions against a stored baseline:
+
+![Degradation detection](docs/screenshots/degradation.png)
+
+Prompt-cache probe settings and cache-friendly mode:
+
+![Prompt-cache check](docs/screenshots/cache-check.png)
+
+Multi-channel comparison:
+
+![Channel comparison](docs/screenshots/compare.png)
+
+All views, including request samples, runs, and the log: [docs/screenshots.md](docs/screenshots.md).
 
 ## Overview
 
@@ -141,12 +156,50 @@ Token counts come from the API `usage` object when present; otherwise tiktoken i
 | Guide | When you need it |
 |---|---|
 | [docs/demo.md](docs/demo.md) | first five minutes with the local mock upstream |
-| [README.zh-CN.md](README.zh-CN.md) | full reference: features, metric formulas, API table (Chinese) |
-| [DESIGN.md](DESIGN.md) | UI tokens, component states, chart rules, accessibility |
+| [docs/screenshots.md](docs/screenshots.md) | every view of the dashboard, captured from real runs |
+| [README.zh-CN.md](README.zh-CN.md) | Chinese reference: feature list, load profiles, full API table |
+| [docs/DESIGN.md](docs/DESIGN.md) | UI tokens, component states, chart rules, accessibility |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | dev setup, test commands, PR expectations |
 | [SECURITY.md](SECURITY.md) | key handling and vulnerability reporting |
 | [CHANGELOG.md](CHANGELOG.md) | what changed between versions |
 | [docs/releasing.md](docs/releasing.md) | release checklist |
+
+## API
+
+All endpoints are local; the UI is the only consumer.
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/parse` | parse pasted text into targets |
+| POST | `/api/probe` | single probe with DNS/TCP/TLS breakdown |
+| GET/POST | `/api/targets/models` | list upstream models (key travels in the body) |
+| POST | `/api/runs` | start a run per target |
+| GET | `/api/runs` | run list (active runs + history) |
+| GET | `/api/runs/{id}` | detail and summary |
+| GET | `/api/runs/{id}/stream` | SSE metrics stream |
+| GET | `/api/runs/{id}/series` | downsampled series for charts |
+| GET | `/api/runs/{id}/samples` | raw request samples |
+| GET | `/api/runs/{id}/export.csv` `.json` `.md` | export |
+| POST | `/api/runs/{id}/stop` `/pause` `/resume` | run control |
+| GET | `/api/compare?ids=` | multi-run comparison |
+| GET/POST | `/api/schedules` | scheduled checks |
+| GET | `/api/alerts` | alert history |
+| POST | `/api/cache/check` | prompt-cache probe (`background=true` returns a job) |
+| GET | `/api/cache/check/{job_id}` | probe job status |
+| POST | `/api/cache/check/{job_id}/cancel` | cancel a probe job |
+| GET | `/api/cache/checks?limit=&offset=` | probe history (paginated) |
+| POST/DELETE | `/api/cache/checks/{id}/baseline` | manage cache baseline |
+| GET | `/api/bench/datasets` | degradation dimensions and item counts |
+| POST | `/api/bench/run` | start degradation run |
+| GET | `/api/bench/runs` `/api/bench/runs/{id}` | degradation history and detail |
+| POST | `/api/bench/runs/{id}/baseline` `/stop` | baseline and stop |
+| GET | `/api/health` | health check |
+
+## Error classes
+
+Failures are classified, not just counted:
+
+`auth` · `rate_limit` · `overloaded` · `invalid_request` · `model_not_found` · `context_length` · `content_filter` · `server_error` · `timeout` · `connect_error` · `tls_error` · `empty_response` · `stream_interrupted`
 
 ## Project layout
 
@@ -166,7 +219,7 @@ Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```bash
 uv sync --frozen --group dev
-uv run --frozen pytest          # 88 tests, coverage gate 55%
+uv run --frozen pytest          # 88 tests, coverage 63.9% (gate 55%)
 ```
 
 ## Security

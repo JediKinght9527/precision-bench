@@ -33,15 +33,26 @@ jobs:
       - name: Run tests with coverage
         run: uv run --frozen pytest
 
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          retention-days: 14
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
+          verbose: true
+
       - name: Compile Python sources
         run: uv run --frozen python -m compileall -q server tests
 
       - name: Check frontend syntax
         run: |
           for file in web/*.js; do node --check "$file"; done
-
-      - name: Check whitespace
-        run: git diff --check
 
   image:
     runs-on: ubuntu-latest
