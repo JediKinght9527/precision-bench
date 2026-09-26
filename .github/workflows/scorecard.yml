@@ -24,7 +24,7 @@ jobs:
           persist-credentials: false
 
       - name: Run analysis
-        uses: ossf/scorecard-action@master
+        uses: ossf/scorecard-action@v2.4.4
         with:
           results_file: results.sarif
           results_format: sarif
@@ -33,13 +33,13 @@ jobs:
           publish_results: ${{ secrets.SCORECARD_TOKEN != '' }}
 
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4.38.2
         with:
           sarif_file: results.sarif
 
       - name: Add job summary
         if: ${{ always() }}
-        uses: ossf/scorecard-action@master
+        uses: ossf/scorecard-action@v2.4.4
         with:
           results_file: results.sarif
           results_format: sarif
