@@ -92,7 +92,7 @@ async def lifespan(app: FastAPI):
         await store.close()
 
 
-app = FastAPI(title="LLM Bench", lifespan=lifespan)
+app = FastAPI(title="Precision Bench", lifespan=lifespan)
 
 
 class PasteBody(BaseModel):
@@ -646,7 +646,7 @@ async def api_export_md(run_id: str):
 def _to_markdown(row: dict, tgt: dict, s: dict) -> str:
     e, tt, tp = s["e2e"], s["ttft"], s["tpot"]
     lines = [
-        f"# LLM Bench 性能报告 · {row.get('model') or '-'}",
+        f"# Precision Bench 性能报告 · {row.get('model') or '-'}",
         "",
         f"- **供应商**：{tgt.get('name', '-')}  ({row.get('provider', '-')})",
         f"- **Base URL**：{row.get('base_url_masked', '-')}",

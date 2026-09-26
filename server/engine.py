@@ -682,7 +682,7 @@ class Engine:
                 st.max_consecutive_fail,
             )
         if triggered and a.webhook_url and a.webhook_kind != "none":
-            text = f"【LLM Bench 告警】{st.cfg.name} / {st.target.name}\n" + "\n".join(
+            text = f"【Precision Bench 告警】{st.cfg.name} / {st.target.name}\n" + "\n".join(
                 f"- {t}" for t in triggered
             )
             await notifier.send(a.webhook_url, a.webhook_kind, text)

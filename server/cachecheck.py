@@ -86,7 +86,7 @@ def _median(vals: list[float]) -> float | None:
 
 
 def _summarize(rounds: list[dict], p: CacheCheckParams) -> dict:
-    """判定完全由用户设的阈值驱动，结论附数据依据（DESIGN.md §11）。
+    """判定完全由用户设的阈值驱动，结论附数据依据（docs/DESIGN.md §11）。
 
     加速比判读用 min 口径（miss 最快 / hit 最快）：思考型模型的 TTFT 含思考时长、
     方差极大，中位数会被一轮长思考拖到阈值下；min 是「预填充节省」的噪声下界。

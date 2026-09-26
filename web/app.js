@@ -1,4 +1,4 @@
-/* LLM Bench — 性能压测模块 */
+/* Precision Bench — 性能压测模块 */
 (function () {
 'use strict';
 const $ = (id) => document.getElementById(id);
@@ -1226,7 +1226,7 @@ function buildVerifyReport(run, cache, bench) {
   const cacheText = !cacheSummary ? '未执行缓存检测' : cacheSummary.verdict === 'valid' ? '缓存有效' : cacheSummary.verdict === 'suspect' ? '疑似假缓存' : cacheSummary.verdict === 'unreported' ? '未上报缓存字段' : '缓存检测失败';
   const benchText = !benchSummary ? '未执行降智检测' : benchSummary.verdict === 'normal' || benchSummary.verdict === 'baseline' ? '降智检测正常' : benchSummary.verdict === 'suspect' ? '发现疑似降智' : benchSummary.verdict === 'improved' ? '高于基线' : benchSummary.verdict;
   const lines = [
-    '# LLM Bench 渠道验真报告',
+    '# Precision Bench 渠道验真报告',
     '',
     `- 生成时间：${new Date().toLocaleString('zh-CN')}`,
     `- Run ID：${run.id}`,
@@ -1487,7 +1487,7 @@ async function createSchedule() {
 function notify(run) {
   const s = run.summary;
   if (!('Notification' in window) || Notification.permission !== 'granted' || !s) return;
-  new Notification(`LLM Bench · ${run.target} 完成`, { body: `成功率 ${pct(s.success_rate)} · E2E P95 ${fmtTime(s.e2e.p95)} · TTFT ${fmtTime(s.ttft.mean)}` });
+  new Notification(`Precision Bench · ${run.target} 完成`, { body: `成功率 ${pct(s.success_rate)} · E2E P95 ${fmtTime(s.e2e.p95)} · TTFT ${fmtTime(s.ttft.mean)}` });
 }
 const PERSIST = ['mode', 'concurrency', 'request_count', 'rate', 'duration_s', 'ramp_s', 'cooldown_s', 'ramp_rate', 'warmup', 'timeout_s', 'retries', 'jitter', 'proxy', 'prompt_mode', 'input_dist', 'input_tokens', 'system_prompt', 'top_p', 'max_tokens', 'temperature', 'slo_ttft', 'slo_tpot', 'slo_e2e', 'price_in', 'price_out', 'price_cache_in', 'price_cache_write', 'sch_name', 'sch_cron', 'alert_url', 'c_rounds', 'c_prefix', 'c_speedup', 'c_preset', 'cache_mode'];
 function saveCfg() { const o = {}; PERSIST.forEach((id) => { const el = $(id); if (el) o[id] = el.value; }); ['stream', 'connection_reuse', 'verify_tls', 'randomize', 'cache_mode'].forEach((id) => o[id] = $(id).checked); localStorage.setItem('llmbench.cfg', JSON.stringify(o)); }

@@ -1,4 +1,4 @@
-/* LLM Bench · 共享 UI 套件
+/* Precision Bench · 共享 UI 套件
    - 统一 ECharts 主题与图表基座
    - Toast / 确认框 / 弹窗 / 抽屉
    - 面板菜单（全屏 / 导出 PNG）

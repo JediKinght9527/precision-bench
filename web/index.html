@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="theme-color" content="#0e1014" />
 <meta name="build" content="__BUILD__" />
-<title>LLM Bench · 中转 API 性能 / 降智检测</title>
+<title>Precision Bench · 中转 API 性能 / 降智检测</title>
 <link rel="icon" href="/static/favicon.svg" />
 <link rel="stylesheet" href="/static/style.css?v=__BUILD__" />
 </head>
@@ -14,8 +14,8 @@
   <!-- ============ 左导轨 ============ -->
   <nav class="rail">
     <div class="rail-brand">
-      <div class="rail-logo" title="LLM Bench" aria-hidden="true">
-        <!-- 检定仪表盘：琥珀指针 + 刻度，与 Precision Bench 同语言 -->
+      <div class="rail-logo" title="Precision Bench" aria-hidden="true">
+        <!-- 检定仪表盘：琥珀指针 + 刻度 -->
         <svg class="rail-logo-svg" viewBox="0 0 64 64" width="28" height="28">
           <rect width="64" height="64" rx="14" fill="#12151b"/>
           <circle cx="32" cy="32" r="22" fill="none" stroke="#2a3140" stroke-width="3"/>
@@ -34,7 +34,7 @@
           <circle cx="32" cy="32" r="1.6" fill="#12151b"/>
         </svg>
       </div>
-      <div class="rail-brand-tx"><b>LLM Bench</b><span>中转 API 检定台</span></div>
+      <div class="rail-brand-tx"><b>Precision Bench</b><span>中转 API 检定台</span></div>
     </div>
 
     <div class="rail-cap">检测</div>
@@ -70,7 +70,7 @@
     <!-- 状态铭牌：仪表面板感 -->
     <div class="rail-plate" title="服务状态">
       <div class="rp-row"><span class="led" id="railLed"></span><span id="railHealth">…</span></div>
-      <div class="rp-row rp-meta"><span>运行</span><b id="railRuns">0</b></div>
+      <div class="rp-row rp-meta"><span>记录</span><b id="railRuns">0</b></div>
       <div class="rp-row rp-meta"><span>错误</span><b id="railErrs">0</b></div>
     </div>
 
@@ -387,7 +387,7 @@
       <div class="toolbar">
         <span class="stat"><span class="led" id="health"></span><b id="healthTxt">…</b></span>
         <span class="stat perfonly rec" id="rec" hidden><span class="led"></span>REC</span>
-        <span class="stat perfonly">运行 <b id="runCount">0</b></span>
+        <span class="stat perfonly">记录 <b id="runCount">0</b></span>
         <span class="stat perfonly">请求 <b id="reqCount">0</b></span>
         <span class="stat perfonly">错误 <b id="errCount">0</b></span>
         <span class="stat benchonly" hidden>条目 <b id="b-progress">0/0</b></span>

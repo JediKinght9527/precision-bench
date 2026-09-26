@@ -1,4 +1,4 @@
-/* LLM Bench — 降智检测模块 */
+/* Precision Bench — 降智检测模块 */
 (function () {
 'use strict';
 const $ = (id) => document.getElementById(id);

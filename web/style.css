@@ -1,5 +1,5 @@
 /* ==========================================================================
-   LLM Bench — 中转 API 检定台 · Precision Bench
+   Precision Bench — 中转 API 检定台
    设计：精密检定仪 — 蓝黑画布 + 冷石板阶 + 琥珀校准针 #F0B429
    概念：实验室测量仪器的深色演绎（Braun 工业感），非游戏 RGB、非 SaaS 模板。
    纪律：
@@ -205,10 +205,13 @@ kbd {
 .rail-brand-tx { min-width: 0; line-height: 1.25; }
 .rail-brand-tx b {
   display: block;
-  font-size: var(--fs-13);
+  font-size: 11.5px;
   font-weight: 600;
-  letter-spacing: -.01em;
+  letter-spacing: -.03em;
   color: var(--tx-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .rail-brand-tx span {
   display: block;
