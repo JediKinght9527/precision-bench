@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# LLM Bench 常驻服务管理（launchd）
+# Precision Bench 常驻服务管理（launchd）
 #   ./service.sh install    安装并启动（开机自启 + 崩溃自动重启）
 #   ./service.sh status     查看状态
 #   ./service.sh logs       跟踪日志
@@ -9,11 +9,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-LABEL="com.marco.llmbench"
+LABEL="com.marco.precisionbench"
+LEGACY_LABEL="com.marco.llmbench"   # 旧版本名，仅用于安装时清理
 ROOT="$(pwd)"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
-LOG="$HOME/Library/Logs/llm-bench.log"
-ERR="$HOME/Library/Logs/llm-bench.err.log"
+LOG="$HOME/Library/Logs/precision-bench.log"
+ERR="$HOME/Library/Logs/precision-bench.err.log"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8787}"
 UID_NUM="$(id -u)"
@@ -62,6 +63,14 @@ free_port() {
 case "${1:-}" in
   install)
     if [ ! -x ".venv/bin/python" ]; then echo "同步依赖…"; uv sync; fi
+    # 清理 0.3.0 之前的旧 label，避免留下一个仍在开机自启的僵尸服务
+    LEGACY_PLIST="$HOME/Library/LaunchAgents/${LEGACY_LABEL}.plist"
+    if [ -f "$LEGACY_PLIST" ]; then
+      launchctl bootout "gui/${UID_NUM}" "$LEGACY_PLIST" 2>/dev/null || true
+      launchctl disable "gui/${UID_NUM}/${LEGACY_LABEL}" 2>/dev/null || true
+      rm -f "$LEGACY_PLIST"
+      echo "已移除旧服务 ${LEGACY_LABEL}"
+    fi
     free_port
     write_plist
     launchctl bootout "gui/${UID_NUM}" "$PLIST" 2>/dev/null || true

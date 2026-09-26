@@ -16,11 +16,9 @@
 
 <p align="center">
   <b><a href="#quick-start">Quick start</a></b> ·
-  <a href="#load-testing">Load testing</a> ·
-  <a href="#prompt-cache-verification">Cache</a> ·
-  <a href="#degradation-detection">Degradation</a> ·
-  <a href="README.zh-CN.md">简体中文</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a>
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="README.zh-CN.md">简体中文</a>
 </p>
 
 <img src="docs/assets/hero.png" alt="Precision Bench dashboard" width="100%">
@@ -44,6 +42,8 @@ All views, including request samples, runs, and the log: [docs/screenshots.md](d
 ## Overview
 
 Precision Bench is a local dashboard for testing third-party LLM endpoints. It sends real traffic at a channel, measures latency directly from the SSE stream, normalizes the provider's usage fields, and compares later runs against a stored baseline.
+
+> The dashboard UI is Chinese-only; the documentation is English-first. Metric names appear in English inside the UI (TTFT, TPOT, E2E, P95).
 
 - Paste `base_url + api_key + model` (also JSON, curl, labeled tables) — protocol is detected: OpenAI-compatible, Anthropic Messages, OpenRouter.
 - Three load modes: closed-loop, open-loop with coordinated-omission correction, and duration.

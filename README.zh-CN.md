@@ -22,6 +22,8 @@
 
 第三方 **LLM 中转 API** 性能、稳定性与质量检定平台。粘贴供应商给的 `base_url + api_key + model` 即可测，输出可复算的原始指标、波形、性能判定、缓存验证与降智检测结果。
 
+> 界面为中文，指标名在界面内使用英文缩写（TTFT / TPOT / E2E / P95）；文档英文为主。
+
 - 协议：**OpenAI 兼容** + **Anthropic Messages** + **OpenRouter**（聚合网关，OpenAI 兼容；粘贴 `sk-or-…` 或正文含 openrouter 自动识别并补 `https://openrouter.ai/api/v1`）
 - 形态：本地服务 + **Precision Bench 中转 API 检定台**（蓝黑画布 + 琥珀校准针 + 健康分环；ECharts 本地化，零外网依赖）
 - 模式：并发（closed-loop）/ 定频（open-loop，**含 coordinated omission 修正**）/ 时长（长时稳定性）

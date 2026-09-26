@@ -24,6 +24,7 @@ uv run --frozen pytest
 - 性能/指标变更必须补测试，并说明统计口径变化。
 - UI 变更至少检查 1720px、1024px、720px 三个视口。
 - 不为了让测试通过而放宽断言、删除失败样本或隐藏告警。
+- 工作流里的 action 与 Docker 基础镜像都固定在 commit SHA / digest 上，**不要手改**；升级交给 Dependabot 的 PR。
 
 ## 本地检查
 
@@ -31,7 +32,16 @@ uv run --frozen pytest
 uv run --frozen pytest
 uv run --frozen python -m compileall -q server tests
 for file in web/*.js; do node --check "$file"; done
+uv build && uv run --with twine twine check dist/*
 git diff --check
+```
+
+打包改动（`pyproject.toml`、`server/__main__.py`、前端目录结构）后，额外验证装出来的包能跑：
+
+```bash
+uv venv /tmp/pbcheck
+uv pip install --python /tmp/pbcheck/bin/python dist/*.whl
+/tmp/pbcheck/bin/precision-bench --port 8899
 ```
 
 ## 领域约定

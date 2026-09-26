@@ -16,6 +16,10 @@
 
 ### Changed
 
+- 服务与脚本统一为 Precision Bench：launchd label 改为 `com.marco.precisionbench`，日志改为 `~/Library/Logs/precision-bench.log`，`install` 会自动清理 0.3.0 之前的旧 label。
+- PyPI 元数据补 13 条 trove classifiers。
+- 依赖升级：actions/upload-artifact v7.0.1、codecov/codecov-action v7.1.1（由 Dependabot PR 合并，SHA pin 同步更新）。
+- 新增 CodeQL 静态分析（Python + JavaScript）。
 - 产品名统一为 Precision Bench：界面标题与左栏徽标、浏览器通知、Markdown 报告标题、告警文案。
 - 顶栏与左栏的「运行 N」改为「记录」：该数字是内存中保留的运行记录数，原标签易被误读为正在运行数量。
 - 移除手写的 tests / coverage 静态徽章（数字会随代码过期），改用 CI、release、license、python 四枚。
