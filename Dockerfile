@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # 多阶段构建：依赖层走缓存，最终镜像不带 uv（对齐 uv 官方 docker 示例）
 
-FROM ghcr.io/astral-sh/uv:python3.12-trixie-slim AS builder
+FROM ghcr.io/astral-sh/uv:python3.12-trixie-slim@sha256:10b94fe3550b7a96e3982860bb82cdefba6300264a7a40bb9334acf21a450974 AS builder
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked
 
 # ---------- 最终镜像 ----------
-FROM python:3.12-slim-trixie
+FROM python:3.12-slim-trixie@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
 
 RUN groupadd --system --gid 999 nonroot \
  && useradd --system --gid 999 --uid 999 --create-home nonroot
