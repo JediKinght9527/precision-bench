@@ -438,7 +438,6 @@ async def execute(
             usage_out = None
             usage_in = None
             first_ts: float | None = None
-            last_ts = t0
             got_content = False
             protocol_complete = False
             async for line in resp.aiter_lines():
@@ -481,7 +480,6 @@ async def execute(
                                 got_content = True
                                 first_ts = now
                             text_parts.append(delta["text"])
-                            last_ts = now
                     elif etype == "message_delta":
                         u = obj.get("usage") or obj.get("usageMetadata") or {}
                         if u.get("output_tokens") is not None:
@@ -526,7 +524,6 @@ async def execute(
                             got_content = True
                             first_ts = now
                         text_parts.append(delta_text)
-                        last_ts = now
 
             if not protocol_complete:
                 res.error_class = "stream_interrupted"

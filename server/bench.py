@@ -12,7 +12,7 @@ from typing import Any
 import httpx
 
 from . import bench_data
-from .schemas import Provider, Target
+from .schemas import Target
 from .store import Store, _mask
 
 
@@ -231,8 +231,15 @@ class BenchManager:
             st.status = "error"
             try:
                 await self.store.set_bench_status(st.run_id, st.status)
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001
+                # 终态写库失败会让这条检测永远停在 running，必须留痕
+                import logging
+
+                logging.getLogger("llmbench.bench").exception(
+                    "降智检测 %s 的终态(%s)写入失败，历史里会残留 running 记录",
+                    st.run_id,
+                    st.status,
+                )
             self._emit(st, {"type": "error", "message": str(exc)})
             self._emit(st, {"type": "status", "status": st.status})
 

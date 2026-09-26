@@ -330,8 +330,15 @@ class Engine:
             st.error = f"{type(exc).__name__}: {exc}"
             try:
                 await self.store.set_status(st.run_id, st.status, ended=True)
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001
+                # 终态写库失败会让这条 run 永远停在 running，必须留痕而不是静默吞掉
+                import logging
+
+                logging.getLogger("llmbench.engine").exception(
+                    "运行 %s 的终态(%s)写入失败，历史里会残留 running 记录",
+                    st.run_id,
+                    st.status.value,
+                )
             self._emit(st, {"type": "error", "message": st.error})
             self._emit(st, {"type": "status", "status": st.status.value})
 
@@ -682,8 +689,9 @@ class Engine:
                 st.max_consecutive_fail,
             )
         if triggered and a.webhook_url and a.webhook_kind != "none":
-            text = f"【Precision Bench 告警】{st.cfg.name} / {st.target.name}\n" + "\n".join(
-                f"- {t}" for t in triggered
+            text = (
+                f"【Precision Bench 告警】{st.cfg.name} / {st.target.name}\n"
+                + "\n".join(f"- {t}" for t in triggered)
             )
             await notifier.send(a.webhook_url, a.webhook_kind, text)
 

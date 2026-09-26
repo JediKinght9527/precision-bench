@@ -462,7 +462,7 @@ def build_items(
                 filler[:mid]
                 + f"\nThe secret access code is {code}.\n"
                 + filler[mid:]
-                + f"\nQuestion: What is the secret access code? Answer with the code only. Do not explain."
+                + "\nQuestion: What is the secret access code? Answer with the code only. Do not explain."
             )
             expanded.append(
                 {
