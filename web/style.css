@@ -82,10 +82,10 @@
   --r-3: 8px;
   --r-pill: 999px;
 
-  /* 字体 */
-  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", sans-serif;
-  --sans-d: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", sans-serif;
-  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Cascadia Code", monospace;
+  /* 字体：IBM Plex（拉丁/数字）→ 系统字体（中文/全角） */
+  --sans: "Plex Sans", -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  --sans-d: "Plex Sans", -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono: "Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Cascadia Code", "PingFang SC", monospace;
 
   /* 尺寸 */
   --rail-w: 160px;
@@ -97,6 +97,50 @@
   --t-fast: 100ms;
   --t-base: 150ms;
   --ease: cubic-bezier(0, 0, .2, 1);
+}
+
+/* ═══════════ 自托管字体（IBM Plex Sans / Mono，OFL）═══════════
+   latin 子集；中文与全角符号回退到系统字体（PingFang SC / 微软雅黑），
+   避免携带 10MB+ 的 CJK 字体。font-display:swap 保证离线也不阻塞首屏。 */
+@font-face {
+  font-family: "Plex Sans";
+  font-style: normal; font-weight: 400; font-display: swap;
+  src: url("fonts/ibm-plex-sans-latin-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Plex Sans";
+  font-style: normal; font-weight: 500; font-display: swap;
+  src: url("fonts/ibm-plex-sans-latin-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Plex Sans";
+  font-style: normal; font-weight: 600; font-display: swap;
+  src: url("fonts/ibm-plex-sans-latin-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Plex Sans";
+  font-style: normal; font-weight: 700; font-display: swap;
+  src: url("fonts/ibm-plex-sans-latin-700.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Plex Mono";
+  font-style: normal; font-weight: 400; font-display: swap;
+  src: url("fonts/ibm-plex-mono-latin-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Plex Mono";
+  font-style: normal; font-weight: 500; font-display: swap;
+  src: url("fonts/ibm-plex-mono-latin-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Plex Mono";
+  font-style: normal; font-weight: 600; font-display: swap;
+  src: url("fonts/ibm-plex-mono-latin-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Plex Mono";
+  font-style: normal; font-weight: 700; font-display: swap;
+  src: url("fonts/ibm-plex-mono-latin-700.woff2") format("woff2");
 }
 
 /* ═══════════ Reset ═══════════ */
