@@ -49,10 +49,10 @@
   --info: #6aa5f7;
 
   /* 极弱状态投影 */
-  --glow-ok: 0 0 8px rgba(52, 211, 153, .28);
-  --glow-warn: 0 0 8px rgba(245, 158, 11, .28);
-  --glow-bad: 0 0 8px rgba(240, 100, 100, .30);
-  --glow-acc: 0 0 8px rgba(240, 180, 41, .28);
+  --glow-ok: 0 0 8px color-mix(in srgb, var(--ok) 28%, transparent);
+  --glow-warn: 0 0 8px color-mix(in srgb, var(--warn) 28%, transparent);
+  --glow-bad: 0 0 8px color-mix(in srgb, var(--bad) 30%, transparent);
+  --glow-acc: 0 0 8px color-mix(in srgb, var(--acc) 28%, transparent);
 
   /* 图表系列色：暖色主轨 + 冷色对照，共 2 个色相。
      原来 5 个色相互相打架（同屏琥珀/浅金/灰蓝/深棕/紫），读起来像
@@ -788,7 +788,7 @@ button.block { width: 100%; }
 }
 .chan-x:hover {
   color: var(--bad);
-  background: rgba(240, 100, 100, .14);
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
   border-color: transparent;
 }
 .chan-warn { grid-column: 1; font-size: var(--fs-11); color: var(--warn); }
@@ -989,7 +989,7 @@ main > .view {
 }
 .pin-x:hover {
   color: var(--bad);
-  background: rgba(240, 100, 100, .14);
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
   border-color: transparent;
 }
 .pin-hint { font-size: var(--fs-11); color: var(--tx-3); align-self: center; }
@@ -1347,12 +1347,12 @@ body.has-data #perfDash:not([hidden]) .panel-grid > .panel:nth-child(6) { animat
 }
 .verdict-block .vb-sub .vb-note.is-bad {
   background: transparent;
-  border-left-color: rgba(240, 100, 100, .6);
+  border-left-color: color-mix(in srgb, var(--bad) 60%, transparent);
   color: var(--tx-2);
 }
 .verdict-block .vb-sub .vb-note.is-warn {
   background: transparent;
-  border-left-color: rgba(245, 158, 11, .55);
+  border-left-color: color-mix(in srgb, var(--warn) 55%, transparent);
 }
 .verdict-block .vb-sub .vb-cache {
   display: block;
@@ -1387,14 +1387,14 @@ body.has-data #perfDash:not([hidden]) .panel-grid > .panel:nth-child(6) { animat
   flex: 1 1 0;
   min-width: 2px;
   max-width: 8px;
-  background: rgba(52, 211, 153, .32);
+  background: color-mix(in srgb, var(--ok) 32%, transparent);
   border-radius: 1px;
 }
-.verdict-block .ticks i.f { background: rgba(240, 100, 100, .42); }
+.verdict-block .ticks i.f { background: color-mix(in srgb, var(--bad) 42%, transparent); }
 .verdict-block .ticks i.empty { background: var(--line-2); }
 /* 全失败：降调统一条，避免红墙刷屏（文案已写失败数） */
 .verdict-block .ticks.all-fail i.f {
-  background: rgba(240, 100, 100, .2);
+  background: color-mix(in srgb, var(--bad) 2%, transparent);
   height: 55% !important;
 }
 .verdict-block .ticks-cap {
@@ -1548,14 +1548,16 @@ body.has-data #perfDash:not([hidden]) .panel-grid > .panel:nth-child(6) { animat
 .hero { position: relative; }
 
 .panel {
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: var(--r-3);
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
   transition: border-color var(--t-base) var(--ease);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .025) inset, 0 4px 16px rgba(0, 0, 0, .18);
 }
 .panel:hover {
   border-color: var(--line-2);
@@ -1902,9 +1904,9 @@ table.grid td.trunc {
   border-radius: 50%;
   background: currentColor;
 }
-.badge.ok { color: var(--ok); border-color: rgba(48, 164, 108, .35); background: rgba(48, 164, 108, .08); }
-.badge.no { color: var(--bad); border-color: rgba(240, 100, 100, .38); background: rgba(240, 100, 100, .10); }
-.badge.run { color: var(--info); border-color: rgba(62, 155, 214, .35); background: rgba(62, 155, 214, .08); }
+.badge.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); background: color-mix(in srgb, var(--ok) 8%, transparent); }
+.badge.no { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 38%, transparent); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+.badge.run { color: var(--info); border-color: color-mix(in srgb, var(--info) 35%, transparent); background: color-mix(in srgb, var(--info) 8%, transparent); }
 
 .log {
   font: 400 var(--fs-11)/1.65 var(--mono);
@@ -2092,8 +2094,8 @@ table.grid td.trunc {
 .ml-item.hit {
   color: var(--ok);
   font-weight: 600;
-  background: rgba(52, 211, 153, .08);
-  outline: 1px solid rgba(52, 211, 153, .35);
+  background: color-mix(in srgb, var(--ok) 08%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--ok) 35%, transparent);
   border-radius: 3px;
   padding: 2px 4px;
   margin: 2px -4px;
@@ -2401,16 +2403,6 @@ table.grid td.trunc {
 }
 
 /* ═══════ 精密检定台纪律段：琥珀仅 CTA / 图表主系列 / active 细条 ═══════ */
-.panel {
-  position: relative;
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: var(--r-3);
-  min-width: 0;
-  overflow: hidden;
-  transition: border-color var(--t-base) var(--ease);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, .025) inset, 0 4px 16px rgba(0, 0, 0, .18);
-}
 .panel::after { content: none; }
 .panel.hero {
   border-color: var(--line-2);
@@ -2597,7 +2589,7 @@ main {
 .numfield-range:focus-visible { outline: none; }
 .numfield-range:focus-visible::-webkit-slider-thumb {
   background: var(--acc);
-  box-shadow: 0 0 0 3px rgba(240, 180, 41, .25);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc) 25%, transparent);
 }
 .numfield-range::-moz-range-track {
   height: 4px;
@@ -2672,33 +2664,9 @@ main {
 
 .numfield-tick[data-hide="1"] { display: none; }
 
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: .01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: .01ms !important;
-  }
-}
 /* reduced transparency → 中性实色回退 */
-@media (prefers-reduced-transparency: reduce) {
-  :root {
-    --bg-1: #12151b;
-    --bg-2: #171b23;
-    --bg-3: #1e232e;
-  }
-}
 
 /* ═══════ 精密检定台纪律段：琥珀仅 CTA / 图表主系列 / active 细条 ═══════ */
-.panel {
-  position: relative;
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: var(--r-3);
-  min-width: 0;
-  overflow: hidden;
-  transition: border-color var(--t-base) var(--ease);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, .025) inset, 0 4px 16px rgba(0, 0, 0, .18);
-}
 .panel::after { content: none; }
 .panel.hero {
   border-color: var(--line-2);
@@ -2883,7 +2851,7 @@ main {
 .numfield-range:focus-visible { outline: none; }
 .numfield-range:focus-visible::-webkit-slider-thumb {
   background: var(--acc);
-  box-shadow: 0 0 0 3px rgba(240, 180, 41, .25);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc) 25%, transparent);
 }
 .numfield-range::-moz-range-track {
   height: 4px;
