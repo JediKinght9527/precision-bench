@@ -1622,6 +1622,8 @@ body.has-data #perfDash:not([hidden]) .panel-grid > .panel:nth-child(6) { animat
 }
 .panel:hover .panel-menu,
 .panel-menu:focus-within { opacity: 1; }
+/* 面板菜单里两种按钮：纯图标按钮是 24px 方形，
+   带文字的（如「导出对比」）必须给宽度与内边距，否则文字比按钮还宽 */
 .panel-menu button {
   width: 24px;
   height: 24px;
@@ -1630,6 +1632,11 @@ body.has-data #perfDash:not([hidden]) .panel-grid > .panel:nth-child(6) { animat
   border-color: transparent;
   color: var(--tx-3);
   border-radius: var(--r-1);
+}
+.panel-menu button.mini.ghost {
+  width: auto;
+  padding: 0 var(--s-2);
+  white-space: nowrap;
 }
 .panel-menu button:hover {
   background: var(--bg-4);
