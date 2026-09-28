@@ -594,6 +594,12 @@ select {
 }
 .switch input:checked::after { transform: translateX(14px); }
 .switch:focus-within { color: var(--tx-1); }
+/* 键盘焦点环：开关是自定义样式的原生 input，必须显式给环，
+   否则键盘用户看不出焦点落在哪 */
+.switch input:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
 
 /* ─── Buttons ─── */
 button {
@@ -2142,6 +2148,13 @@ table.grid td.trunc {
 .pitem.on {
   background: var(--bg-4);
   box-shadow: inset 2px 0 0 var(--acc);
+}
+/* 命令面板用 combobox 模式（焦点始终在 input 上，靠 aria-activedescendant 指向
+   当前项），所以高亮项不会有原生焦点环。在强制高对比下把左侧标尺加粗，
+   避免"当前选中项"看不出差别。 */
+@media (prefers-contrast: more) {
+  .pitem.on { box-shadow: inset 3px 0 0 var(--acc); background: var(--bg-5); }
+  .switch input:focus-visible { outline-width: 3px; }
 }
 .pempty {
   padding: var(--s-6);
