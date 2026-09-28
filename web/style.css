@@ -1105,118 +1105,166 @@ body.has-data #perfDash:not([hidden]) .panel-grid > .panel:nth-child(6) { animat
   gap: var(--s-4);
 }
 .vb-hud-tx { min-width: 0; flex: 1; }
-/* 健康分读数头：横向刻度尺 + 滑动指针（替代原先的 conic 圆环）。
-   刻度尺比圆环更适合"分数"这种线性量——指针位置可直接读作分值，
-   而圆环要靠弧长估算。--score 由 setScore() 写入，契约与圆环版一致。 */
-.vb-gauge {
-  --score: 0;
-  /* --gauge-c 不在此设默认值：由 .verdict-block.s-* 决定状态色，
-     在此声明 var(--tx-4) 会覆盖继承值，导致填充段永远是灰色。 */
-  width: 118px;
+/* 三环仪表：可靠性（外）/ 速度（中）/ 有效吞吐（内）
+   Apple HIG 要点：纯色无渐变无阴影、圆头线帽、起点 12 点顺时针、轨道同色低透明。 */
+.vb-rings {
+  width: 132px;
   flex: none;
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.rings-svg { display: block; overflow: visible; }
+.ring { transition: opacity var(--t-base) var(--ease); }
+.ring-track { fill: none; stroke: currentColor; stroke-opacity: .16; }
+.ring-arc {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  transition: stroke-dasharray var(--t-xslow) var(--ease-out);
+}
+.ring-ticks line { stroke: var(--tx-4); stroke-width: 1; opacity: .55; }
+/* 三个维度的色相：沿用项目既有语义色 —— 琥珀=品牌主判据，绿=达标，蓝=数据 */
+.ring.tone-a, .rings-legend .tone-a { --tone: var(--acc); }
+.ring.tone-b, .rings-legend .tone-b { --tone: var(--ok); }
+.ring.tone-c, .rings-legend .tone-c { --tone: var(--info); }
+.ring { color: var(--tone); }
+.rings-legend .sw, .rings-legend .bar b { background: var(--tone); }
+/* 圆心：健康分。数字在环心，与判定状态色无关（状态由 vb-state 表达） */
+.rings-core {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  cursor: default;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  pointer-events: none;
 }
-.vb-gauge-top { display: flex; align-items: baseline; gap: var(--s-1); }
-.vb-gauge b {
+.rings-core b {
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
-  font-size: 26px;
+  font-size: 21px;
   font-weight: 700;
-  color: var(--tx-1);
-  letter-spacing: -.03em;
   line-height: 1;
+  letter-spacing: -.04em;
+  color: var(--tx-1);
 }
-.vb-gauge-cap {
-  font-size: 10px;
-  letter-spacing: .04em;
+.rings-core span { font-size: 8px; letter-spacing: .06em; color: var(--tx-4); }
+.rings-empty {
+  display: grid;
+  place-items: center;
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  border: 1px dashed var(--line-2);
+  color: var(--tx-4);
+  font-size: 22px;
+  font-family: var(--mono);
+}
+/* 图例：三维度 = 色点 + 名称 + 实测值。放在三环下方整行，
+   替掉原先与右侧指标重复的四枚绿色 chip。1px 上边框把它与仪表区分开。 */
+/* 图例：三维度读数表（色点 + 名称 + 达标度微条 + 数值）
+   竖排三行而非横排三列：横排在 360px 宽的判定区里会挤成一团，
+   竖排才能让「哪一项最优」一眼可见（最优项加"最优"标记）。 */
+.rings-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--line);
+}
+.rings-legend > div {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+  font-size: var(--fs-11);
   color: var(--tx-3);
 }
-/* 轨道：底色 + 已填充段（填充色随状态） */
-.vb-gauge-track {
-  position: relative;
-  height: 6px;
-  border-radius: var(--r-pill);
-  background: var(--line-2);
-  box-shadow: inset 0 0 0 1px var(--line);
-  overflow: visible;
-}
-.vb-gauge-fill {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: calc(var(--score) * 1%);
-  border-radius: var(--r-pill);
-  background: var(--gauge-c);
-  transition: width var(--t-xslow) var(--ease-out), background-color var(--t-slow) var(--ease-out);
-}
-/* 指针：一条竖线 + 顶部方帽，读数更像仪器而不只是进度条 */
-.vb-gauge-needle {
-  position: absolute;
-  top: -3px;
-  bottom: -3px;
-  left: calc(var(--score) * 1%);
-  width: 2px;
-  margin-left: -1px;
-  background: var(--tx-1);
+.rings-legend .sw {
+  width: 7px;
+  height: 7px;
+  flex: none;
   border-radius: 1px;
-  transition: left var(--t-xslow) var(--ease-out);
+  background: var(--tone);
 }
-.vb-gauge-needle::before {
-  content: "";
-  position: absolute;
-  top: -2px;
-  left: 50%;
-  width: 5px;
-  height: 5px;
-  margin-left: -2.5px;
-  border-radius: 1px;
-  background: var(--tx-1);
-  transform: rotate(45deg);
+.rings-legend .nm { flex: none; min-width: 4.6em; }
+/* 达标度微条：与环长同源，便于逐行横向比较 */
+.rings-legend .bar {
+  flex: 1 1 auto;
+  min-width: 20px;
+  height: 3px;
+  border-radius: var(--r-pill);
+  background: var(--bg-4);
+  overflow: hidden;
 }
-/* 刻度：只标 0 / 50 / 100 三个真实位置。
-   注意：判定状态（s-ok/s-warn/s-bad）由"合格线是否通过"决定，与健康分数值
-   没有对应关系，所以这里不画 60/85 之类的"阈值分界"，避免误导。 */
-.vb-gauge-marks { position: relative; height: 4px; }
-.vb-gauge-marks i {
-  position: absolute;
-  top: 0;
-  height: 4px;
-  width: 1px;
-  background: var(--tx-4);
+.rings-legend .bar b {
+  display: block;
+  height: 100%;
+  background: var(--tone);
+  opacity: .7;
+  transition: width var(--t-xslow) var(--ease-out);
 }
-.vb-gauge-marks .m-0   { left: 0; }
-.vb-gauge-marks .m-50  { left: 50%; }
-.vb-gauge-marks .m-100 { left: 100%; margin-left: -1px; }
+.rings-legend em {
+  flex: none;
+  min-width: 4.4em;
+  text-align: right;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-style: normal;
+  color: var(--tx-1);
+  letter-spacing: -.02em;
+}
+.rings-legend .best-tag {
+  flex: none;
+  padding: 0 3px;
+  border: 1px solid var(--line-2);
+  border-radius: 2px;
+  font-size: 9px;
+  line-height: 13px;
+  color: var(--tx-3);
+}
+.rings-legend > div.is-best .nm { color: var(--tx-1); font-weight: 500; }
+.rings-legend > div.is-best .best-tag { color: var(--tx-2); border-color: var(--line-2); }
+/* 达标状态用颜色表达（环色是维度身份，此处是状态，两者分开） */
+.rings-legend em.r-p  { color: var(--ok); }
+.rings-legend em.r-w  { color: var(--warn); }
+.rings-legend em.r-f  { color: var(--bad); }
+.rings-legend em.r-na { color: var(--tx-2); }
+
+/* 判定状态是这块面板的主角：状态色 + 34px 字号 + 状态圆点。
+   原先它只有 12px，而旁边的数字是 48px——层级完全倒置。 */
 .verdict-block .vb-state {
-  font-size: var(--fs-12);
+  font-size: clamp(26px, 2.1vw, 34px);
   font-weight: 600;
-  letter-spacing: .04em;
-  text-transform: none;
-  color: var(--tx-2);
+  line-height: 1.1;
+  letter-spacing: .01em;
+  color: var(--tx-1);
   display: flex;
   align-items: center;
   gap: var(--s-2);
 }
 .verdict-block .vb-state::before {
   content: "";
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--tx-4);
   flex: none;
 }
-.verdict-block.s-ok { --gauge-c: var(--ok); }
+/* 状态色：只给状态本身上色，巨号数字仍为中性白，避免满屏彩色 */
+.verdict-block.s-ok .vb-state { color: var(--ok); }
+.verdict-block.s-warn .vb-state { color: var(--warn); }
+.verdict-block.s-bad .vb-state { color: var(--bad); }
+.verdict-block.s-run .vb-state { color: var(--acc); }
 .verdict-block.s-ok .vb-state { color: var(--ok); text-shadow: none; }
 .verdict-block.s-ok .vb-state::before { background: var(--ok); box-shadow: none; }
-.verdict-block.s-warn { --gauge-c: var(--warn); }
 .verdict-block.s-warn .vb-state { color: var(--warn); text-shadow: none; }
 .verdict-block.s-warn .vb-state::before { background: var(--warn); box-shadow: none; }
-.verdict-block.s-bad { --gauge-c: var(--bad); }
 .verdict-block.s-bad .vb-state { color: var(--bad); text-shadow: none; }
 .verdict-block.s-bad .vb-state::before { background: var(--bad); box-shadow: none; }
-.verdict-block.s-run { --gauge-c: var(--acc); }
 .verdict-block.s-run .vb-state { color: var(--acc); text-shadow: none; }
 .verdict-block.s-run .vb-state::before {
   background: var(--acc);
@@ -1225,23 +1273,26 @@ body.has-data #perfDash:not([hidden]) .panel-grid > .panel:nth-child(6) { animat
 }
 
 .vb-label {
-  font-size: var(--fs-11);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--fs-12);
   font-weight: 500;
-  color: var(--tx-3);
-  margin-top: var(--s-3);
+  color: var(--tx-2);
+  margin-top: 6px;
   letter-spacing: .02em;
-  text-transform: none;
 }
+.vb-label-tip { font-size: 10px; font-weight: 400; color: var(--tx-4); }
 /* 巨数读数：始终白字（状态只由左侧判定徽章表达，避免四连红）；不换行防「0」折成白斑 */
 .verdict-block .vb-num {
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
-  font-size: var(--fs-num);
-  letter-spacing: -.04em;
-  line-height: 1.1;
+  font-size: clamp(26px, 2vw, 32px);
+  letter-spacing: -.035em;
+  line-height: 1.15;
   color: var(--tx-1);
-  margin-top: 4px;
+  margin-top: 2px;
   text-shadow: none;
   white-space: nowrap;
 }
@@ -1264,9 +1315,11 @@ body.has-data #perfDash:not([hidden]) .panel-grid > .panel:nth-child(6) { animat
 .verdict-block.vb-empty.s-bad .vb-num,
 .verdict-block.vb-empty.s-run .vb-num { color: var(--tx-4); font-weight: 500; text-shadow: none; }
 
+/* 缓存说明曾是这个面板里最醒目的文字（3 行灰字），
+   压到 11px / tx-4，让它退到判定与读数之后。 */
 .verdict-block .vb-sub {
-  font-size: var(--fs-12);
-  color: var(--tx-3);
+  font-size: var(--fs-11);
+  color: var(--tx-4);
   margin-top: var(--s-2);
   line-height: 1.5;
 }
@@ -1298,52 +1351,28 @@ body.has-data #perfDash:not([hidden]) .panel-grid > .panel:nth-child(6) { animat
   font-size: var(--fs-11);
 }
 
+/* 合格线基准：等宽小字 + 发丝竖分隔，读作仪表参数表而非一排按钮 */
+/* 合格线：2 列网格而非 flex 换行 —— 换行会让第二行以竖线开头，很难看 */
 .vb-slo {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: auto repeat(2, minmax(0, 1fr));
+  gap: 3px var(--s-3);
   margin-top: var(--s-3);
-}
-.slo-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 10px;
-  border-radius: var(--r-1);
-  font-size: var(--fs-11);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--line);
   font-family: var(--mono);
-  color: var(--tx-2);
-  background: var(--bg-3);
-  border: 1px solid var(--line-2);
-  white-space: nowrap;
-}
-.slo-chip b {
-  font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: var(--tx-1);
+  font-size: 10.5px;
+  color: var(--tx-3);
 }
-.slo-chip::before {
-  content: "";
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--tx-4);
-  flex: none;
+.vb-slo .slo-cap {
+  grid-row: 1 / span 2;
+  align-self: start;
+  color: var(--tx-4);
+  font-weight: 500;
+  letter-spacing: .04em;
 }
-.slo-chip.p::before { background: var(--ok); }
-.slo-chip.w::before { background: var(--warn); }
-.slo-chip.f { border-color: rgba(240, 100, 100, .35); }
-.slo-chip.f::before { background: var(--bad); }
-.slo-chip.f b { color: var(--tx-1); }
-
-.verdict-block .ticks {
-  display: flex;
-  gap: 2px;
-  align-items: flex-end;
-  height: 12px;
-  margin-top: var(--s-3);
-}
+.vb-slo span { white-space: nowrap; }
 .verdict-block .ticks i {
   flex: 1 1 0;
   min-width: 2px;
@@ -2480,29 +2509,6 @@ button.ghost.on {
 .verdict.g .vtitle, .verdict.x .vtitle { text-shadow: none; }
 
 /* SLO chip：中性底，仅数值/点表状态；红仅 fail */
-.slo-chip {
-  background: var(--bg-3);
-  border-color: var(--line-2);
-}
-.slo-chip.p { border-color: color-mix(in srgb, var(--ok) 35%, transparent); color: var(--tx-2); box-shadow: none; }
-.slo-chip.p b { color: var(--tx-1); }
-.slo-chip.w { border-color: color-mix(in srgb, var(--warn) 40%, transparent); color: var(--tx-2); box-shadow: none; }
-.slo-chip.w b { color: var(--tx-1); }
-.slo-chip.f { border-color: color-mix(in srgb, var(--bad) 38%, transparent); color: var(--tx-2); box-shadow: none; }
-.slo-chip.f b { color: var(--tx-1); }
-.slo-chip::before { box-shadow: none; }
-
-.verdict-block .ticks i { box-shadow: none; }
-.verdict-block .ticks i.f { box-shadow: none; }
-
-/* 空态卡片：仪器铭牌感 */
-.ob-card {
-  border: 1px solid var(--line-2);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, .4);
-  background:
-    linear-gradient(135deg, rgba(240, 180, 41, .04) 0%, transparent 42%),
-    color-mix(in srgb, var(--bg-2) 94%, transparent);
-}
 .ob-card::before {
   content: "";
   display: block;
@@ -2790,29 +2796,6 @@ button.ghost.on {
 .verdict.g .vtitle, .verdict.x .vtitle { text-shadow: none; }
 
 /* SLO chip：中性底，仅数值/点表状态；红仅 fail */
-.slo-chip {
-  background: var(--bg-3);
-  border-color: var(--line-2);
-}
-.slo-chip.p { border-color: color-mix(in srgb, var(--ok) 35%, transparent); color: var(--tx-2); box-shadow: none; }
-.slo-chip.p b { color: var(--tx-1); }
-.slo-chip.w { border-color: color-mix(in srgb, var(--warn) 40%, transparent); color: var(--tx-2); box-shadow: none; }
-.slo-chip.w b { color: var(--tx-1); }
-.slo-chip.f { border-color: color-mix(in srgb, var(--bad) 38%, transparent); color: var(--tx-2); box-shadow: none; }
-.slo-chip.f b { color: var(--tx-1); }
-.slo-chip::before { box-shadow: none; }
-
-.verdict-block .ticks i { box-shadow: none; }
-.verdict-block .ticks i.f { box-shadow: none; }
-
-/* 空态卡片：仪器铭牌感 */
-.ob-card {
-  border: 1px solid var(--line-2);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, .4);
-  background:
-    linear-gradient(135deg, rgba(240, 180, 41, .04) 0%, transparent 42%),
-    color-mix(in srgb, var(--bg-2) 94%, transparent);
-}
 .ob-card::before {
   content: "";
   display: block;

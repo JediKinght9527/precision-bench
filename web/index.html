@@ -425,25 +425,15 @@
         <section class="summary">
           <div class="verdict-block" id="verdictBlock">
             <div class="vb-hud">
-              <div class="vb-gauge" id="vbRing" style="--score:0">
-                <div class="vb-gauge-top">
-                  <b id="vbScore">–</b>
-                  <span class="vb-gauge-cap">健康分</span>
-                </div>
-                <div class="vb-gauge-track" aria-hidden="true">
-                  <div class="vb-gauge-fill"></div>
-                  <div class="vb-gauge-needle"></div>
-                </div>
-                <div class="vb-gauge-marks" aria-hidden="true">
-                  <i class="m-0"></i><i class="m-50"></i><i class="m-100"></i>
-                </div>
+              <div class="vb-rings" id="vbRing">
+                <div class="rings-empty">–</div>
               </div>
               <div class="vb-hud-tx">
                 <div class="vb-state" id="vbState">等待运行</div>
-                <div class="vb-label">E2EL P95</div>
-                <div class="vb-num" id="vbNum">—<span id="vbUnit">ms</span></div>
+                <div class="vb-label" id="vbLabel">等待运行</div>
               </div>
             </div>
+            <div class="rings-legend" id="vbRingsLegend"></div>
             <div class="vb-sub" id="vbSub">粘贴渠道配置并开始测试</div>
             <div class="vb-slo" id="vbSlo"></div>
             <div class="ticks" id="vbTicks"></div>

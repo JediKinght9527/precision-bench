@@ -245,7 +245,6 @@ function summaryEmpty() {
   $('vbRing').title = '';
   $('vbRingsLegend').innerHTML = '';
   $('vbLabel').textContent = '等待运行';
-  $('vbNum').innerHTML = '—';
   $('vbSub').textContent = '粘贴渠道配置并开始测试';
   $('vbSlo').innerHTML = '';
   $('vbTicks').innerHTML = ''; $('vbTicksCap').textContent = '最近请求';
@@ -303,7 +302,7 @@ function ringVerdicts(sum, run) {
   const v = evaluate(sum, run);
   const by = {};
   for (const ch of v.chips || []) by[ch.k] = ch;
-  const rp = ringVerdicts(sum, run);
+  const rp = ringParts(sum, run);
   if (!rp) return null;
   const sr = by['Success rate'];
   const e2e = by['E2EL P95'];
@@ -385,7 +384,6 @@ function renderRunning(run) {
   $('vbRing').title = '';
   $('vbRingsLegend').innerHTML = '';
   $('vbLabel').textContent = '采集中';
-  $('vbNum').innerHTML = '—';
   $('vbSub').innerHTML = run
     ? `<b>${esc(run.target === run.model ? run.target : `${run.target}　${run.model}`)}</b>`
     : '';
@@ -460,7 +458,6 @@ function renderCards(sum) {
   if (!rp) {
     $('vbRing').innerHTML = `<div class="rings-empty">–</div>`;
     $('vbLabel').textContent = '等待运行';
-    $('vbNum').innerHTML = `—`;
   } else {
     const best = rp.rings.reduce((a, b) => (b.v > a.v ? b : a));
     $('vbRing').innerHTML = ringsSvg(rp) + `
@@ -468,10 +465,18 @@ function renderCards(sum) {
         <b>${score == null ? '–' : score}</b>
         <span>健康分</span>
       </div>`;
-    $('vbRingsLegend').innerHTML = rp.rings.map((g, i) =>
-      `<span class="tone-${RING_TONE[i]}" title="${esc(g.note || g.tip)}"><i></i>${esc(g.label)}<em class="r-${g.cls || 'na'}">${esc(g.disp)}</em></span>`).join('');
-    $('vbLabel').textContent = `最佳项 · ${best.label}`;
-    $('vbNum').innerHTML = esc(best.disp);
+    $('vbRingsLegend').innerHTML = rp.rings.map((g, i) => {
+      const isBest = g === best;
+      const pc = Math.round(Math.max(0, Math.min(1, g.v || 0)) * 100);
+      return `<div class="tone-${RING_TONE[i]}${isBest ? ' is-best' : ''}" title="${esc(g.note || g.tip)}">
+        <i class="sw"></i><span class="nm">${esc(g.label)}</span>
+        <span class="bar"><b style="width:${pc}%"></b></span>
+        <em class="r-${g.cls || 'na'}">${esc(g.disp)}</em>
+        ${isBest ? '<span class="best-tag">最优</span>' : ''}
+      </div>`;
+    }).join('');
+    // 数值只在图例里出现一次；右侧只留判定状态与最优维度名
+    $('vbLabel').innerHTML = `${esc(best.label)}<span class="vb-label-tip">三环中最优</span>`;
   }
   // target 与 model 同名时不重复显示（如渠道名直接填了模型名）
   const t = run ? (run.target === run.model ? run.target : `${run.target}　${run.model}`) : '';
@@ -513,11 +518,15 @@ function renderCards(sum) {
   $('vbSub').innerHTML = `${who}${noteHtml}<span class="vb-cache">${esc(cacheLine)}</span>`;
   // 合格线基准：原先这里渲染四枚 chip，但它们的数值与三环图例、右侧指标格
   // 完全重复（同屏三处）。这里改为一行阈值——chip 独有、别处没有的信息。
+  // 合格线是用户填的设置值，不是测量值：去掉 fmtTime 的尾随 .0
+  // （"逐字 ≤50.0 ms" 会暗示不存在的测量精度）
+  const fmtSlo = (ms) => fmtTime(ms).replace(/\.0(?=\s|$)/, '');
   const slo = runSlo(run);
   $('vbSlo').innerHTML =
-    `<span>合格线</span><span>成功率 ≥${pct(slo_rate(slo))}</span>` +
-    `<span>首字 ≤${fmtTime(slo.ttft_ms)}</span><span>端到端 ≤${fmtTime(slo.e2e_ms)}</span>` +
-    `<span>逐字 ≤${fmtTime(slo.tpot_ms)}</span>`;
+    `<span class="slo-cap">合格线</span>` +
+    `<span>成功率 ≥${(slo_rate(slo) * 100).toFixed(1).replace(/\.0$/, '')}%</span>` +
+    `<span>首字 ≤${fmtSlo(slo.ttft_ms)}</span><span>端到端 ≤${fmtSlo(slo.e2e_ms)}</span>` +
+    `<span>逐字 ≤${fmtSlo(slo.tpot_ms)}</span>`;
   renderTicks(run);
 }
 

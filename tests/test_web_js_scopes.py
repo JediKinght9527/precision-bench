@@ -82,6 +82,35 @@ def test_braces_are_balanced() -> None:
     assert depth == 0, f"app.js 花括号最终未配平，剩余 {depth} 个未闭合"
 
 
+# 允许的自递归：断线重连是刻意设计，不是 bug
+ALLOWED_SELF_RECURSION = {
+    # connectSSE 在收到 reset 事件后递归重连（带退避），属正常控制流
+    "connectSSE",
+}
+
+
+def test_no_self_recursive_functions() -> None:
+    """函数体内不得调用自身 —— 无限递归会抛 RangeError，且常常只在有数据时才走到。
+
+    真实 bug：ringVerdicts 里误写成 `const rp = ringVerdicts(sum, run)`
+    （本该是 ringParts），导致判定区三环永远停在空态。
+    白名单里的 connectSSE 是断线重连的刻意设计。
+    """
+    for i, line in enumerate(LINES):
+        m = FUNC_RE.match(line)
+        if not m:
+            continue
+        name = m.group(1)
+        if name in ALLOWED_SELF_RECURSION:
+            continue
+        body = _function_body(i)
+        # 去掉函数自身的定义行，避免把 `function ringVerdicts(...)` 误判为调用
+        body = "\n".join(body.split("\n")[1:])
+        assert not re.search(rf"\b{re.escape(name)}\s*\(", body), (
+            f"app.js:{i + 1} 的 {name}() 在自身函数体内调用了自己，会无限递归"
+        )
+
+
 @pytest.mark.parametrize("idx", [i for i, l in enumerate(LINES) if "UI.anim(" in l])
 def test_ui_anim_argument_in_scope(idx: int) -> None:
     """UI.anim(...) 的实参标识符必须在所在函数内声明或是形参。
