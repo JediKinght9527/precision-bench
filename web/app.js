@@ -213,10 +213,14 @@ const SLO_DEF = { ttft_ms: 1500, tpot_ms: 50, e2e_ms: 5000 };
 const runSlo = (run) => Object.assign({}, SLO_DEF, (run && run.slo) || {});
 /* 与 evaluate() 同色阶：≤limit 绿，≤1.5×limit 黄，否则红 */
 const latSlo = (s, v, limit) => (s.failed > 0 || limit == null ? '' : v <= limit ? 'v-ok' : v <= limit * 1.5 ? 'v-warn' : 'v-bad');
+/* 主区三格：三环没覆盖的维度。
+   原先是「成功率 / TTFT P95 / E2EL P95」，但这三项恰好就是三环的三个维度
+   （可靠性=成功率、速度=max(TTFT,E2EL)、有效吞吐=Goodput），且三环图例里
+   已经带着数值 —— 同一个数字同屏出现两次。现在改为三环之外的补充项。 */
 const PRIMARY_DEFS = [
-  ['Success rate', (s) => pct(s.success_rate), '', (s) => s.success_rate >= 0.99 ? 'v-ok' : s.success_rate >= 0.95 ? 'v-warn' : 'v-bad', '请求成功率'],
-  ['TTFT P95', (s) => lvT(s, s.ttft.p95), '', (s, run) => latSlo(s, s.ttft.p95, runSlo(run).ttft_ms), 'Time To First Token 首字延迟 P95（与判定同口径：合格线见侧栏「合格线 · 成本」区内的首字/端到端）'],
-  ['E2EL P95', (s) => lvT(s, s.e2e.p95), '', (s, run) => latSlo(s, s.e2e.p95, runSlo(run).e2e_ms), 'End-to-End Latency 端到端 P95（与判定同口径：合格线见侧栏「合格线 · 成本」区内的首字/端到端）'],
+  ['TPOT P95', (s) => (s.measurable && !s.measurable.tpot ? 'n/a' : lvT(s, s.tpot.p95)), '', (s, run) => (s.measurable && !s.measurable.tpot ? '' : latSlo(s, s.tpot.p95, runSlo(run).tpot_ms)), 'Time Per Output Token 每 token 时间 P95，与「逐字 ≤」合格线同口径'],
+  ['ITL P99', (s) => (s.measurable && !s.measurable.itl ? 'n/a' : lvT(s, s.itl.p99)), '', () => '', 'Inter-Token Latency 相邻 token 间隔的 P99，反映解码是否均匀（非流式不可测）'],
+  ['E2EL 尾差', (s) => (s.e2e && s.e2e.p99 != null && s.e2e.p50 != null ? lvT(s, s.e2e.p99 - s.e2e.p50) : '–'), '', (s) => { const d = s.e2e && s.e2e.p99 - s.e2e.p50; return d == null ? '' : d > 800 ? 'v-warn' : ''; }, 'P99 − P50，长尾厚度。越大说明请求间抖动越剧烈（k6/Locust 都会单列尾分位）'],
 ];
 const METRIC_DEFS = [
   ['成功 RPS', (s) => fmt(s.rps, 2), 'req/s', () => '', '成功请求速率 = 成功请求数 / 墙钟；尝试速率见详情'],
@@ -224,12 +228,17 @@ const METRIC_DEFS = [
   ['Cache hit', (s) => { const d = cacheDisplay(s); return d.text; }, '', (s) => cacheDisplay(s).cls, '缓存命中率 = 命中输入 token / 总输入 token（token 口径）；请求 hit/miss 见判定块。随机化/过短 → n/a；渠道未上报字段 → n/a（非 0%）'],
   // 分档补 v-bad：原来只有 ≥0.9 绿 / 否则黄两档，2% 的 goodput 只被标成"警告"，
   // 和「Cost 未配置」看起来一样重 —— 而它其实是压倒性的失败。
-  ['Goodput', (s) => pct(s.goodput), '', (s) => s.goodput >= 0.9 ? 'v-ok' : s.goodput >= 0.6 ? 'v-warn' : 'v-bad', '达标请求占比（TTFT/E2E/TPOT 均≤合格线）；计入 SCORE（20 分）'],
-  ['TPOT', (s) => (s.measurable && !s.measurable.tpot ? 'n/a' : s.ok ? fmtTime(s.tpot.mean) : '–'), '', (s, run) => (s.measurable && !s.measurable.tpot ? '' : latSlo(s, s.tpot.mean, runSlo(run).tpot_ms)), 'Time Per Output Token 每 token 时间（均值着色用侧栏 tpot 合格线；判定块用 P95）'],
-  ['ITL P99', (s) => (s.measurable && !s.measurable.itl ? 'n/a' : s.ok ? fmtTime(s.itl.p99) : '–'), '', () => '', 'Inter-Token Latency 相邻 token 间隔的 P99（非流式不可测）'],
-  ['E2EL P50', (s) => lvT(s, s.e2e.p50), '', () => '', 'End-to-End Latency 端到端 P50'],
-  ['E2EL P99', (s) => lvT(s, s.e2e.p99), '', () => '', '端到端长尾；主流压测工具（k6/Locust）都会单列的尾分位'],
-  ['E2EL mean', (s) => lvT(s, s.e2e.mean), '', () => '', '端到端均值'],
+  // Goodput 已由三环的「有效吞吐」表达，不再在此重复
+  ['TPOT mean', (s) => (s.measurable && !s.measurable.tpot ? 'n/a' : s.ok ? fmtTime(s.tpot.mean) : '–'), '', (s, run) => (s.measurable && !s.measurable.tpot ? '' : latSlo(s, s.tpot.mean, runSlo(run).tpot_ms)), '每 token 时间均值。主区用的是 P95（与判定同口径），这里用均值看整体解码速度'],
+  // 端到端的三个分位合并成一格：P50/P99/mean 拆三格时纵向空间被摊薄，
+  // 合并后仍能同时看到中位、长尾与均值，且少两行
+  // 三个分位共用一个单位后长度从 176px 降到 ~110px，1280px 视口不再溢出
+  ['E2EL P50/99/均值', (s) => {
+    if (!s.e2e) return '–';
+    const num = (v) => fmtTime(v).replace(/\s*[a-z]+$/, '');
+    const u = fmtTime(s.e2e.p50).match(/[a-z]+$/);
+    return `${num(s.e2e.p50)} / ${num(s.e2e.p99)} / ${num(s.e2e.mean)}${u ? ' ' + u[0] : ''}`;
+  }, '', () => '', '端到端延迟的 P50 / P99 / 均值。P50 看常态、P99 看长尾，两者差距大说明请求间抖动剧烈'],
   ['Checks', (s) => (s.ok > 0 && s.checks && s.checks.nonempty_rate != null ? pct(s.checks.nonempty_rate) : '–'), '', (s) => (s.ok > 0 && s.checks && s.checks.empty_output ? (s.checks.nonempty_rate >= 0.95 ? 'v-warn' : 'v-bad') : s.ok > 0 ? 'v-ok' : ''), '内容校验（k6 checks 口径）：成功请求中输出 token>0 的占比；0 token 通常意味着渠道返回 200 但空补全'],
   ['Cost', (s) => (s.cost && (s.cost.price_in > 0 || s.cost.price_out > 0) ? '¥' + fmt(s.cost.total, 4) : '未配置'), '', () => '', '总花费 = 输入×单价 + 输出×单价（在「合格线 · 成本」里填写单价后自动估算）'],
   ['Errors', (s) => fmt(s.failed), '', (s) => s.failed ? 'v-bad' : '', '失败请求数'],
