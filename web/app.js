@@ -393,7 +393,7 @@ function renderRunning(run) {
   const dash = (k, hint) => `<div class="metric is-empty"><dt title="${esc(hint || '')}">${k}</dt><dd>–</dd></div>`;
   $('roPrimary').innerHTML = PRIMARY_DEFS.map(([k, , , , hint]) => `<div class="ro-item is-empty"><dt title="${esc(hint || '')}">${k}</dt><dd>–</dd></div>`).join('');
   $('metrics').innerHTML = METRIC_DEFS.map(([k, , , , hint]) => dash(k, hint)).join('');
-  ['e2e', 'ttft', 'tpot', 'tput', 'heat', 'err', 'dist', 'cmp'].forEach((k) => UI.noData($('ch-' + k), 'Waiting for data…'));
+  ['e2e', 'ttft', 'tpot', 'tput', 'heat', 'err', 'dist', 'cmp'].forEach((k) => UI.noData($('ch-' + k), '等待数据', '开始一次测试后这里会实时绘制'));
   document.querySelectorAll('#perfDash .panel-grid > .panel').forEach((p) => p.classList.add('is-waiting'));
 }
 function clearWaiting() {
@@ -622,7 +622,7 @@ function renderSingle(run) {
   const seqCat = S.map((s) => String(s.seq));
   const dense = S.length > 120;   // 样本多时原始点变噪声，自动退到图例里
   if (!hasE2E) {
-    UI.noData($('ch-e2e'), '无成功样本 · 延迟不可测');
+    UI.noData($('ch-e2e'), '无成功样本', '全部请求失败时延迟无法测量');
   } else {
   charts.e2e.setOption(UI.base({
     ...UI.anim(S.length),
@@ -676,7 +676,7 @@ function renderSingle(run) {
 
   const sloLine = (v, color) => ({ silent: true, symbol: 'none', lineStyle: { color, type: 'dashed', width: 1 }, label: { formatter: 'SLO', color, fontSize: 9 }, data: [{ yAxis: v }] });
   if (!hasTTFT) {
-    UI.noData($('ch-ttft'), '无 TTFT 样本 · 全部失败或非流式');
+    UI.noData($('ch-ttft'), '无首字延迟样本', '全部失败或模型非流式返回');
   } else {
   charts.ttft.setOption(UI.base({
     ...UI.anim(S.length),
@@ -688,7 +688,7 @@ function renderSingle(run) {
   }
 
   if (!hasTPOT) {
-    UI.noData($('ch-tpot'), '无 TPOT 样本 · 全部失败或非流式');
+    UI.noData($('ch-tpot'), '无逐字延迟样本', '全部失败或模型非流式返回');
   } else {
   charts.tpot.setOption(UI.base({
     ...UI.anim(S.length),
@@ -701,9 +701,9 @@ function renderSingle(run) {
 
   // 窗口下限 5s：短窗 + seq 等距 x 会把完成时刻抖动画成梳齿
   if (!S.length) {
-    UI.noData($('ch-tput'), '无成功样本 · 吞吐不可测');
-    UI.noData($('ch-heat'), '无成功样本 · 延迟不可测');
-    UI.noData($('ch-dist'), '无成功样本 · 分布不可测');
+    UI.noData($('ch-tput'), '无成功样本', '吞吐按 5 秒滑动窗口计算');
+    UI.noData($('ch-heat'), '无成功样本', '延迟热力图按请求序号分桶');
+    UI.noData($('ch-dist'), '无成功样本', '直方图与累积分布需要成功样本');
   } else {
     const winMs = Math.max(5000, pickBucketMs(S));
     const [rpsArr, tokArr] = windowedRate(S, winMs);
@@ -736,7 +736,7 @@ function renderErrors(S) {
   const classes = [...new Set(S.filter((s) => !s.ok).map((s) => s.error_class || 'unknown'))];
   const bk = pickBucketMs(S);
   const fmtB = bucketLabel(bk);
-  if (!classes.length) { UI.noData($('ch-err'), 'No errors'); return; }
+  if (!classes.length) { UI.noData($('ch-err'), '本轮无失败请求', '成功率 100%'); return; }
   const buckets = bucketize(S, bk, (a) => a);
   charts.err.setOption(UI.base({
     ...UI.anim(S.length),
@@ -858,7 +858,7 @@ function renderCompareChart() {
     .sort((a, b) => (a.samples[0]?.ts || 0) - (b.samples[0]?.ts || 0));
   const runs = all.slice(-5);
   $('cmpLegend').textContent = runs.length ? `最近 ${runs.length} 条${all.length > runs.length ? ` / 共 ${all.length}` : ''}` : '';
-  if (!runs.length) { UI.noData($('ch-cmp'), '无成功样本 · 暂无可对比轨迹'); return; }
+  if (!runs.length) { UI.noData($('ch-cmp'), '暂无可对比轨迹', '完成至少两次测试后可叠加对比'); return; }
   const series = runs.map((r) => {
     const S = visSamples(r).filter((s) => s.ok);
     if (!S.length) return null;
@@ -869,7 +869,7 @@ function renderCompareChart() {
     return { name: `${r.target} (${r.model}) ${stamp}`, type: 'line', showSymbol: false,
              data: pts, lineStyle: { color: r.color, width: 1.4 } };
   }).filter(Boolean);
-  if (!series.length) { UI.noData($('ch-cmp'), '无成功样本 · 暂无可对比轨迹'); return; }
+  if (!series.length) { UI.noData($('ch-cmp'), '暂无可对比轨迹', '完成至少两次测试后可叠加对比'); return; }
   charts.cmp.setOption(UI.base({
     ...UI.anim(series.reduce((n, s) => n + s.data.length, 0)),
     tooltip: UI.tooltip('ms'),

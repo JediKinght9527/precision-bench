@@ -91,9 +91,12 @@
   });
 
   const AXIS = { color: C.tx2, fontSize: 12, fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace' };
-  const SPLIT = { lineStyle: { color: 'rgba(148,163,184,.08)', width: 1 } };
-  const GRAT = { show: true, lineStyle: { color: 'rgba(148,163,184,.08)', width: 1 } };
-  const MINOR = { show: true, lineStyle: { color: 'rgba(148,163,184,.04)', width: 1 } };
+  // 主/次两级网格：次网格比主网格暗得多（参照 ECharts dark 主题的
+  // #484753 / #20203B 两级做法），这是"刻度纸"质感的来源 ——
+  // 单一层级的网格看起来只是脏，单层级偏弱的网格则完全没有结构感。
+  const SPLIT = { lineStyle: { color: 'rgba(148,163,184,.11)', width: 1 } };
+  const GRAT = { show: true, lineStyle: { color: 'rgba(148,163,184,.11)', width: 1 } };
+  const MINOR = { show: true, lineStyle: { color: 'rgba(148,163,184,.045)', width: 1 } };
   const GRID = { left: 56, right: 18, top: 26, bottom: 30 };
 
   const grad = (hex, a1 = 0.22, a2 = 0) => new echarts.graphic.LinearGradient(0, 0, 0, 1, [
@@ -196,15 +199,36 @@
     return c;
   }
 
-  function noData(el, text = 'No data') {
+  /* 空态：不要只丢一行居中文字（这是最省事也最"AI"的画法）。
+     用 SVG 画一个仪表盘轮廓 + 十字准星，与界面的线条语言一致；
+     文字分主次两级，主文说清"为什么空"，副文说"接下来做什么"。 */
+  function noData(el, text = 'No data', hint = '') {
     const inst = echarts.getInstanceByDom(el);
     if (!inst) return;
+    const tx3 = C.tx3, line = C.line2;
     inst.clear();
     inst.setOption({
       backgroundColor: 'transparent',
       graphic: [
-        { type: 'text', left: 'center', top: 'middle', style: { text, fill: C.tx2, fontSize: 13, fontWeight: 500 } },
-        { type: 'text', left: 'center', top: 'middle', style: { text: '\n\n本次运行暂无可用样本', fill: C.tx4, fontSize: 11 } },
+        // 仪表盘轮廓：半环 + 底部缺口，读作"未通电的表盘"
+        {
+          type: 'group', left: 'center', top: '38%', silent: true,
+          children: [
+            { type: 'circle', shape: { r: 21 }, style: { fill: 'transparent', stroke: line, lineWidth: 1 } },
+            { type: 'circle', shape: { r: 13 }, style: { fill: 'transparent', stroke: line, lineWidth: 1 } },
+            // 指针停在零位
+            { type: 'line', shape: { x1: 0, y1: 0, x2: 0, y2: -18 }, style: { stroke: tx3, lineWidth: 1.5 } },
+            { type: 'circle', shape: { cx: 0, cy: 0, r: 2 }, style: { fill: tx3 } },
+          ],
+        },
+        {
+          type: 'text', left: 'center', top: '60%', silent: true,
+          style: { text, fill: tx3, fontSize: 12, fontWeight: 500 },
+        },
+        ...(hint ? [{
+          type: 'text', left: 'center', top: '68%', silent: true,
+          style: { text: hint, fill: C.tx3, fontSize: 11 },
+        }] : []),
       ],
       xAxis: { show: false }, yAxis: { show: false }, series: [],
     }, true);

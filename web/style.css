@@ -77,9 +77,11 @@
   --gap: 12px;
 
   /* 圆角：切角感偏硬 */
-  --r-1: 4px;
-  --r-2: 6px;
-  --r-3: 8px;
+  /* 圆角向 Grafana 收敛（面板 2–4px）：原先 6/8px 占比过高，
+     是"圆润 SaaS 感"的主要来源。控件 5px、面板 4px、方形刻度。 */
+  --r-1: 3px;
+  --r-2: 5px;
+  --r-3: 6px;
   --r-pill: 999px;
 
   /* 字体：IBM Plex（拉丁/数字）→ 系统字体（中文/全角） */
@@ -1496,6 +1498,7 @@ body.has-data #perfDash:not([hidden]) .panel-grid > .panel:nth-child(6) { animat
   margin: 2px 0 0;
   white-space: nowrap;
   overflow: hidden;
+  /* 标签在上、数值在下：数值左对齐，视觉重心与标签一致 */
 }
 .metric dd em {
   font-style: normal;
@@ -1612,7 +1615,10 @@ body.has-data #perfDash:not([hidden]) .panel-grid > .panel:nth-child(6) { animat
 .rollup .grid th { background: var(--bg-2); }
 .rollup-cap { font-size: var(--fs-11); color: var(--tx-3); padding: 6px 2px var(--s-2); }
 
-/* chart well：内凹靠更深一档 bg + 微弱坐标网格（检定仪刻度感） */
+/* chart well：内凹靠更深一档 bg + 微弱坐标网格（检定仪刻度感）
+   底纹与 ECharts 网格构成三级层次，由暗到亮：
+     底纹 .02（28px）→ ECharts 次网格 .045 → ECharts 主网格 .11
+   早先把底纹设成 .032，反而盖过图表主网格，图表区看着"脏"而不是有结构。 */
 .panel-bd {
   position: relative;
   margin: var(--s-2);
@@ -1622,10 +1628,10 @@ body.has-data #perfDash:not([hidden]) .panel-grid > .panel:nth-child(6) { animat
   overflow: hidden;
   background-color: color-mix(in srgb, var(--bg-1) 72%, var(--bg-0));
   background-image:
-    linear-gradient(rgba(148, 163, 184, .032) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, .032) 1px, transparent 1px);
-  background-size: 24px 24px;
-  background-position: -1px -1px;
+    linear-gradient(to right, rgba(255, 255, 255, .02) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, .02) 1px, transparent 1px);
+  background-size: 28px 28px;
+  background-position: 6px 4px;
   border: 1px solid var(--line);
   border-radius: var(--r-2);
 }
@@ -2623,6 +2629,7 @@ main {
   padding: 0;
   border: 0;
   background: none;
+  border-radius: 0;   /* 刻度是"尺"，方角才像仪器；继承全局 button 的 6px 会显得软 */
   color: var(--tx-3);
   font-size: 10px;
   line-height: 11px;
