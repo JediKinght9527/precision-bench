@@ -402,21 +402,51 @@
        · 在数字框里打字 → 原样保留，不被吸附逻辑改写
      跨度大的字段（并发 1–256、请求数 10–10000）走对数刻度，否则低分段
      会被压成一小截。 */
-  const SLIDER_POS = 1000; // 滑杆内部用 0..1000 的整数位置，避免浮点误差
+  /* 滑杆内部用 0..1000 的整数位置，避免浮点误差；跨 log/linear 两种刻度
+     都能用同一套位置算吸附距离。 */
+  const SLIDER_POS = 10000;
+  /* 吸附容差（位置单位，约合轨道的 0.45%）。刻意不设成"永远吸附"：
+     那样滑杆就永远停不到非档位值上，用户想放 90s 却只能落在 60/300。
+     靠近档位才吸（阻尼感），远离就放手（精确值）。 */
+  const SNAP_TOL = 450;
 
   function makeSlider(input, cfg) {
     const min = Number(cfg.min ?? input.min ?? 0);
     const max = Number(cfg.max ?? input.max ?? Math.max(...cfg.detents));
+    const int = cfg.int === true;                       // 整数字段不产生小数
+    const step = cfg.step && Number(cfg.step) > 0 ? Number(cfg.step) : null;
     const log = cfg.scale === 'log' && min > 0 && max / min > 50;
+    const detents = cfg.detents.filter((d) => d >= min && d <= max);
+
+    const clampPos = (pos) => Math.min(SLIDER_POS, Math.max(0, pos));
     const toPos = (v) => {
       const c = Math.min(max, Math.max(min, Number(v) || 0));
-      return log
-        ? Math.round(SLIDER_POS * (Math.log(c / min) / Math.log(max / min)))
-        : Math.round(SLIDER_POS * ((c - min) / (max - min || 1)));
+      return Math.round(log
+        ? SLIDER_POS * (Math.log(c / min) / Math.log(max / min))
+        : SLIDER_POS * ((c - min) / (max - min || 1)));
     };
-    const toVal = (pos) => {
-      if (log) return min * Math.pow(max / min, pos / SLIDER_POS);
-      return min + ((max - min) * pos) / SLIDER_POS;
+    const toVal = (pos) => (log
+      ? min * Math.pow(max / min, clampPos(pos) / SLIDER_POS)
+      : min + ((max - min) * clampPos(pos)) / SLIDER_POS);
+
+    /* 量化：整数字段取整，浮点字段落到声明的步长上。返回 null 表示输入非法。 */
+    const quantize = (v) => {
+      const n = Number(v);
+      if (!isFinite(n)) return null;
+      let x = Math.min(max, Math.max(min, n));
+      if (int) x = Math.round(x);
+      else if (step) x = Math.round(x / step) * step;
+      return Number(x.toFixed(4));
+    };
+    /* 吸附：按"位置距离"判断，所以 log 与 linear 刻度手感一致 */
+    const nearest = (v) => {
+      const p = toPos(v);
+      let best = null, bd = Infinity;
+      for (const d of detents) {
+        const dd = Math.abs(toPos(d) - p);
+        if (dd < bd) { bd = dd; best = d; }
+      }
+      return bd <= SNAP_TOL ? best : null;
     };
 
     const wrap = document.createElement('div');
@@ -426,19 +456,20 @@
     range.className = 'numfield-range';
     range.min = '0';
     range.max = String(SLIDER_POS);
+    /* step 必须是 1：浏览器会把 range.value 夹到 step 的整数倍，
+       step 设成"档位间距"（比如 175）的话滑杆根本表示不了键入的值 ——
+       键 10000 会被挤到 875 位置（对应值 422）。方向键跳档改在 keydown 里做。 */
     range.step = '1';
     range.setAttribute('aria-label', (input.closest('label')?.textContent || input.id).trim());
 
-    /* 档位标记：中间档位只画刻度线，不写文字。
-       侧栏一半字段只有 ~120px 宽，绝对定位的数字标签必然互相碰撞
-       （"300"+"600" 会叠成 "30000"），所以改成「刻度线 + 两端数值」——
-       宽度再窄也不会糊。当前值由上面的数字框负责显示。 */
     const ticks = document.createElement('div');
     ticks.className = 'numfield-ticks';
+    /* 档位标记：中间档位只画刻度线，不写文字。侧栏一半字段只有 ~120px 宽，
+       绝对定位的数字标签必然互相碰撞（"300"+"600" 叠成 "30000"），
+       所以改成「刻度线 + 两端数值」，当前值由上面的数字框负责显示。 */
     const brief = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M`
       : n >= 1000 ? `${(n / 1000).toFixed(n % 1000 ? 1 : 0)}k` : String(n));
     const fmtTick = cfg.tickFormat || brief;
-    const detents = cfg.detents.filter((d) => d >= min && d <= max);
     detents.forEach((d, i) => {
       const b = document.createElement('button');
       const isEnd = i === 0 || i === detents.length - 1;
@@ -449,50 +480,115 @@
       b.setAttribute('aria-label', isEnd ? String(d) : `跳到 ${d}`);
       b.style.left = `${(toPos(d) / SLIDER_POS) * 100}%`;
       b.dataset.val = String(d);
-      b.addEventListener('click', () => setValue(d));
+      b.addEventListener('click', () => apply(d, { snap: false }));
       ticks.appendChild(b);
     });
-    // 两端标签各自贴边，中间档位在窄栏里按可用宽度抽稀
+    /* 刻度线抽稀：既按可用宽度隔位显示，也躲开两端的数值标签。
+       后者是必要的 —— 「爬升时长」的档位是 0/30/60/300，在线性刻度下
+       0% 和 5% 几乎重合，5% 处的刻度线正好盖住 "0"，看上去就像数字丢了。 */
     const thin = () => {
-      const marks = [...ticks.querySelectorAll('.is-mark')];
       const w = ticks.clientWidth || 120;
+      const ends = [...ticks.querySelectorAll('.is-end')];
+      const endX = ends.map((el) => {
+        const x = (toPos(Number(el.dataset.val)) / SLIDER_POS) * w;
+        // 标签自身有宽度（10px 字号，最多 4 个字符 ≈ 26px），按半宽留安全距离
+        return { x, half: (el.textContent.length * 6 + 4) / 2 };
+      });
+      const marks = [...ticks.querySelectorAll('.is-mark')];
       const stride = Math.max(1, Math.ceil(marks.length / Math.max(2, Math.floor(w / 14))));
-      marks.forEach((el, i) => { el.dataset.hide = i % stride ? '1' : '0'; });
+      marks.forEach((el, i) => {
+        const mx = (toPos(Number(el.dataset.val)) / SLIDER_POS) * w;
+        const clash = endX.some((e) => Math.abs(mx - e.x) < e.half + 5);
+        el.dataset.hide = clash || i % stride ? '1' : '0';
+      });
     };
     thin();
     if (window.ResizeObserver) new ResizeObserver(thin).observe(ticks);
 
-    const sync = () => { range.value = String(toPos(input.value)); };
-    function setValue(v, fromBox) {
-      const clamped = Math.min(max, Math.max(min, Number(v)));
-      input.value = fromBox && Number.isFinite(clamped) ? clamped : Math.round(clamped * 1000) / 1000;
-      input.dispatchEvent(new Event('change', { bubbles: true }));
+    /* 高亮当前值最近的那一档：松手就会吸到这里。没有这个提示的话，
+       用户只能靠猜才知道"松手会不会跳"。 */
+    const markActive = (v) => {
+      const near = nearest(v);
+      for (const el of ticks.querySelectorAll('.is-mark')) {
+        el.dataset.active = near != null && el.dataset.val === String(near) ? '1' : '0';
+      }
+    };
+    const sync = () => {
+      range.value = String(toPos(input.value));
+      markActive(input.value);
+    };
+    /* 唯一的写入口：量化 → 可选吸附 → 赋值 → 派发**一次** change。
+       原来 release() 里连着调了两次 setValue，加上 change/pointerup 两个监听，
+       一次松手会派发 4 次 change，saveCfg 之类跟着跑 4 遍。 */
+    function apply(v, { snap = false, silent = false } = {}) {
+      const q = quantize(v);
+      if (q === null) return false;
+      const final = snap ? (nearest(q) ?? q) : q;
+      if (String(input.value) !== String(final)) input.value = String(final);
+      if (!silent) input.dispatchEvent(new Event('change', { bubbles: true }));
       sync();
+      return true;
     }
 
-    range.addEventListener('input', () => {           // 拖动中：实时但不吸附
-      const raw = toVal(Number(range.value));
-      input.value = Math.round(raw * 1000) / 1000;
+    range.addEventListener('input', () => {
+      // 拖动中：只派发 input（不落盘），且立刻量化 —— 整数字段不该露出 17.582
+      const q = quantize(toVal(Number(range.value)));
+      if (q === null) return;
+      input.value = String(q);
       input.dispatchEvent(new Event('input', { bubbles: true }));
+      range.value = String(toPos(q));
     });
-    const release = () => {                             // 松手：吸附到最近档位
-      const raw = toVal(Number(range.value));
-      const near = detents.reduce((a, b) => (Math.abs(b - raw) < Math.abs(a - raw) ? b : a), detents[0]);
-      setValue(raw);
-      if (detents.length > 1 && near != null) setValue(near);
-    };
-    range.addEventListener('change', release);
-    range.addEventListener('pointerup', release);
-    range.addEventListener('keyup', (e) => { if (e.key.startsWith('Arrow')) release(); });
+    // range 原生在松手/键盘结束时都会派发 change，所以只挂这一个监听
+    range.addEventListener('change', () => apply(toVal(Number(range.value)), { snap: true }));
 
-    input.addEventListener('change', sync);
-    input.addEventListener('input', sync);
+    /* 方向键 = 一跳档位。自己处理而不用 range.step：step 必须是 1 才能
+       表示任意值（见上），所以键盘导航在这里补回来。 */
+    range.addEventListener('keydown', (e) => {
+      const cur = quantize(input.value);
+      if (cur === null) return;
+      const at = detents.reduce((best, d, i) => (Math.abs(d - cur) < Math.abs(detents[best] - cur) ? i : best), 0);
+      const last = detents.length - 1;
+      let target = null;
+      switch (e.key) {
+        case 'ArrowRight': case 'ArrowUp': target = Math.min(last, at + 1); break;
+        case 'ArrowLeft': case 'ArrowDown': target = Math.max(0, at - 1); break;
+        case 'PageUp': target = Math.min(last, at + 5); break;
+        case 'PageDown': target = Math.max(0, at - 5); break;
+        case 'Home': target = 0; break;
+        case 'End': target = last; break;
+        default: return;
+      }
+      e.preventDefault();
+      apply(detents[target], { snap: false });
+    });
+
+    // 数字框：输入过程中不移动滑杆（否则清空/输入中途会跳），change 时才夹取
+    let lastGood = input.value;
+    input.addEventListener('input', () => {
+      if (input.value === '' || !isFinite(Number(input.value))) return;  // 空/非法: 保持滑杆不动
+      sync();
+    });
+    input.addEventListener('change', () => {
+      if (input.value === '' || !isFinite(Number(input.value))) {
+        // 清空后失焦：回到上一个有效值，不让空串被存进配置
+        input.value = lastGood;
+        sync();
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        return;
+      }
+      const before = input.value;
+      if (apply(before, { snap: false, silent: true })) {
+        lastGood = input.value;
+        if (input.value !== before) input.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
 
     input.parentNode.insertBefore(wrap, input);
     wrap.appendChild(input);
     wrap.appendChild(range);
     wrap.appendChild(ticks);
     sync();
+    lastGood = input.value;
     input.dataset.hasSlider = '1';
   }
 

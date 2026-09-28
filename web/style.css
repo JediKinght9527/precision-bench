@@ -487,8 +487,12 @@ select {
   background-size: 5px 5px, 5px 5px;
   background-repeat: no-repeat;
 }
-.row { display: flex; gap: var(--s-2); }
-.row > div { flex: 1; min-width: 0; }
+.row { display: flex; gap: var(--s-2); align-items: stretch; }
+/* 标签在窄栏里会折行（「并发爬升（worker/s）」在 1280 下就折成两行）。
+   折行会把输入框顶下去，导致同一行左右两列错位。改成纵向 flex +
+   numfield margin-top:auto，标签无论几行，输入框都贴在单元格底部对齐。 */
+.row > div { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.row > div > label { flex: 0 0 auto; }
 
 /* switch */
 .switch {
@@ -2442,7 +2446,7 @@ main {
   display: grid;
   grid-template-columns: 1fr;
   gap: 3px;
-  /* 档位标签行紧贴下一个字段的标题会显得挤, 留一点呼吸 */
+  margin-top: auto;   /* 贴着单元格底部, 与相邻列对齐 */
   margin-bottom: 3px;
 }
 .numfield > input[type="number"] { width: 100%; }
@@ -2497,40 +2501,60 @@ main {
 }
 .numfield-range:hover::-moz-range-thumb { background: var(--acc); }
 
-/* 档位标记：中间档位是一根 6px 高的刻度线（不写文字），两端才显示数值。
-   侧栏窄栏里绝对定位的数字标签必然互相碰撞，这样最坏情况也只是刻度变稀。 */
+/* 档位尺：一条基准导轨 + 刻度线，刻度线只占上半部分，
+   数值标签放下半部分 —— 两者上下分带，所以不会再出现
+   "0" 和刻度线叠成 "0|" 的撞字。中间刻度只画线不写文字，
+   侧栏 ~116px 的格子里写数字必然互撞（"300"+"600" → "30000"）。 */
 .numfield-ticks {
   position: relative;
-  height: 14px;
+  height: 17px;
   margin: 1px 6px 0;
+}
+.numfield-ticks::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 4px;
+  height: 1px;
+  background: var(--line-2);
 }
 .numfield-tick {
   position: absolute;
-  top: 0;
-  transform: translateX(-50%);
   padding: 0;
   border: 0;
   background: none;
   color: var(--tx-3);
   font-size: 10px;
-  line-height: 13px;
+  line-height: 11px;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
-  transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+  transition: color var(--t-fast) var(--ease), background-image var(--t-fast) var(--ease);
   white-space: nowrap;
 }
-.numfield-tick.is-end:first-child { transform: translateX(-20%); }
-.numfield-tick.is-end:last-child { transform: translateX(-80%); }
+.numfield-tick.is-end { top: 6px; }
+.numfield-tick.is-end:first-child { transform: translateX(-15%); }
+.numfield-tick.is-end:last-child { transform: translateX(-85%); }
 .numfield-tick.is-end:hover { color: var(--acc); }
-/* 中间刻度线：加宽透明命中区，指针/点击都好用，但不占视觉宽度 */
+
+/* 中间刻度线：12px 宽的透明命中区，画出来只有 1px */
 .numfield-tick.is-mark {
+  top: 0;
   width: 12px;
-  height: 13px;
+  height: 9px;
   margin-left: -6px;
-  background: linear-gradient(var(--line-3), var(--line-3)) center 0 / 1px 5px no-repeat;
-  border-radius: 1px;
+  background-image: linear-gradient(var(--line-3), var(--line-3));
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 1px 5px;
 }
-.numfield-tick.is-mark:hover { background-image: linear-gradient(var(--acc), var(--acc)); }
+.numfield-tick.is-mark:hover { background-image: linear-gradient(var(--tx-2), var(--tx-2)); }
+/* 当前值最近的那一档：松手就会吸到这里，给个持续可见的落点提示 */
+.numfield-tick.is-mark[data-active="1"] {
+  background-image: linear-gradient(var(--acc), var(--acc));
+  background-size: 1px 7px;
+  background-position: center bottom;
+}
 
 .numfield-tick[data-hide="1"] { display: none; }
 
