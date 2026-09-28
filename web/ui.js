@@ -207,6 +207,9 @@
     if (!inst) return;
     const tx3 = C.tx3, line = C.line2;
     inst.clear();
+    // 空态也要对读屏用户说清原因，否则 aria-label 还停留在"端到端延迟时序图"，
+    // 读屏用户会以为图上有数据
+    el.setAttribute('aria-label', hint ? `${text}：${hint}` : text);
     inst.setOption({
       backgroundColor: 'transparent',
       graphic: [

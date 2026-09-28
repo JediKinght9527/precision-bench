@@ -113,7 +113,7 @@ def test_no_self_recursive_functions() -> None:
 
 @pytest.mark.parametrize("idx", [i for i, l in enumerate(LINES) if "UI.anim(" in l])
 def test_ui_anim_argument_in_scope(idx: int) -> None:
-    """UI.anim(...) 的实参标识符必须在所在函数内声明或是形参。
+    """UI.anim(...) 的实参标识符必须在所在函数顶层声明或是形参。
 
     曾经的真实 bug：renderCompareChart 内没有 S（它用 series），
     却被注入 `UI.anim(S.length)`，运行时 ReferenceError 导致对比图不渲染。
@@ -145,3 +145,104 @@ def test_ui_anim_argument_in_scope(idx: int) -> None:
         f"app.js:{idx + 1} 的 UI.anim({arg}) 用了 `{ident}`，"
         f"但它不是所在函数的形参、函数体内也没有声明 —— 运行时会 ReferenceError"
     )
+
+
+# aria-label 里插入了数据读数，这些标识符必须存在。
+# 已经踩过三次同类坑：renderCompareChart 的 S、ringVerdicts 的自调用、
+# renderSingle 里误用 renderCards 的入参 sum。
+_ARIA_MARK = re.compile(r"aria(?:Readout)?\w*\(\s*'[^']+'\s*,\s*`([^`]*)`", re.S)
+
+
+def _template_object_keys(tmpl: str) -> set[str]:
+    """模板里形如 x.foo 的 foo 是属性名，不是标识符引用。
+
+    在 ${fmtTime(sum.e2e && sum.e2e.p95)} 中，真正要校验的标识符是 sum 与
+    fmtTime；e2e 只是 sum 的属性，不该被当成未声明的变量。
+    """
+    return set(re.findall(r"\.\s*([A-Za-z_$][\w$]*)", tmpl))
+
+
+def _idents_in_template(tmpl: str) -> set[str]:
+    """提取模板串里所有 ${...} 内的标识符，含嵌套。
+
+    正则只抓最外层会漏掉嵌套引用：写 `${fmtTime(sum.e2e && sum.e2e.p95)}`
+    时，最外层标识符是 fmtTime，而真正会 ReferenceError 的 `sum` 被漏掉 ——
+    这正是要挡的那类 bug，所以必须逐层展开。
+    """
+    out: set[str] = set()
+    rest = tmpl
+    while True:
+        m = re.search(r"\$\{", rest)
+        if not m:
+            return out
+        i = m.end()
+        depth = 1
+        while i < len(rest) and depth:
+            if rest[i] == "{":
+                depth += 1
+            elif rest[i] == "}":
+                depth -= 1
+            i += 1
+        inner = rest[m.end() : i - 1]
+        out |= set(re.findall(r"[A-Za-z_$][\w$]*", inner))
+        rest = rest[i:]
+
+
+def test_aria_readout_identifiers_in_scope() -> None:
+    """ariaReadout(...) 模板串里引用的标识符，必须在该函数内可解析。
+
+    真实 bug：renderSingle(run) 里写了 `${fmtTime(sum.e2e...)}`，
+    但 sum 是 renderCards 的入参，renderSingle 根本没有这个变量 ——
+    运行时 ReferenceError: sum is not defined，图表整块不渲染
+    且只在有数据时才触发。
+    """
+    for i, line in enumerate(LINES):
+        m = _ARIA_MARK.search(line)
+        if not m:
+            continue
+        tmpl = m.group(1)
+        idents = _idents_in_template(tmpl)
+        if not idents:
+            continue
+        start = None
+        params = ""
+        for j in range(i, -1, -1):
+            fm = FUNC_RE.match(LINES[j])
+            if fm:
+                start, params = j, fm.group(2)
+                break
+        if start is None:
+            continue
+        body = _function_body(start)
+        top = _top_level_decls(body)
+        for ident in sorted(idents):
+            if ident in top:
+                continue
+            if re.search(rf"\b{re.escape(ident)}\b", params):
+                continue
+            # 允许引用模块级常量与 UI 暴露的成员
+            if re.search(
+                rf"^(?:const|let|var|function)\s+{re.escape(ident)}\b", APP_JS, re.M
+            ):
+                continue
+            # 解构赋值：const { fmt, pct, fmtTime, ... } = UI;
+            if any(
+                re.search(rf"\b{re.escape(ident)}\b", names)
+                for names in re.findall(
+                    r"^(?:const|let|var)\s*\{([^}]*)\}\s*=", APP_JS, re.M
+                )
+            ):
+                continue
+            # 只认该函数体内的顶层声明或形参；不做更宽的兜底 ——
+            # 早先有个 60 行窗口的宽松匹配，会把邻近变量的赋值误当已声明，
+            # 结果真 bug（renderSingle 用 renderCards 的 sum）反而抓不到。
+            if ident in top:
+                continue
+            # 对象字面量的属性名（sum.e2e 里的 e2e）不是标识符引用，
+            # 交给对象本身解析即可
+            if ident in _template_object_keys(tmpl):
+                continue
+            raise AssertionError(
+                f"app.js:{i + 1} 的 aria-label 模板引用了 `{ident}`，"
+                f"但它在所在函数内既非形参也未声明 —— 运行时 ReferenceError"
+            )

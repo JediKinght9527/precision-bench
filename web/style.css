@@ -27,7 +27,7 @@
   --tx-1: #f0f2f5;
   --tx-2: #9aa3b5;
   --tx-3: #7f899d;
-  --tx-4: #4a5160;
+  --tx-4: #5c6470;   /* 3.0:1 —— 最弱文字也需可读，原 #4a5160 只有 2.26:1 */
 
   /* 琥珀品牌 · 校准针 */
   --acc: #f0b429;
@@ -1321,7 +1321,7 @@ body.has-data #perfDash:not([hidden]) .panel-grid > .panel:nth-child(6) { animat
    压到 11px / tx-4，让它退到判定与读数之后。 */
 .verdict-block .vb-sub {
   font-size: var(--fs-11);
-  color: var(--tx-4);
+  color: var(--tx-3);
   margin-top: var(--s-2);
   line-height: 1.5;
 }
@@ -1370,7 +1370,7 @@ body.has-data #perfDash:not([hidden]) .panel-grid > .panel:nth-child(6) { animat
 .vb-slo .slo-cap {
   grid-row: 1 / span 2;
   align-self: start;
-  color: var(--tx-4);
+  color: var(--tx-3);
   font-weight: 500;
   letter-spacing: .04em;
 }

@@ -614,6 +614,16 @@ function renderSingle(run) {
   const slo = Object.assign({ ttft_ms: 1500, tpot_ms: 50, e2e_ms: 5000 }, run.slo || {});
   const ln = (name, data, color, w = 1.5, extra = {}) => ({ name, type: 'line', showSymbol: false, smooth: 0.25, data, lineStyle: { color, width: w, cap: 'round', join: 'round' }, itemStyle: { color }, ...extra });
 
+  /* 图表是 canvas，读屏软件读不到。把关键读数写进 aria-label，
+     读屏用户才能拿到与视觉用户同等的结论。 */
+  const ariaReadout = (id, txt) => { const el = $(id); if (el) el.setAttribute('aria-label', txt); };
+  // 注意：renderSingle 的入参是 run，没有 sum（sum 是 renderCards 的入参）
+  const sum = (run && run.summary) || {};
+  const sr = pct(sum.success_rate);
+  ariaReadout('ch-e2e', `端到端延迟时序图。成功率 ${sr}，端到端 P95 ${fmtTime(sum.e2e && sum.e2e.p95)}，共 ${S.length} 个成功样本`);
+  ariaReadout('ch-ttft', `首字延迟时序图。首字 P95 ${fmtTime(sum.ttft && sum.ttft.p95)}，合格线 ${fmtTime(slo.ttft_ms)}`);
+  ariaReadout('ch-tpot', `逐字延迟时序图。逐字 P95 ${fmtTime(sum.tpot && sum.tpot.p95)}，合格线 ${fmtTime(slo.tpot_ms)}`);
+
   // 窗口按样本量自适应：固定 50 在只有 30 条的运行里会让首几个离群值一直留在分位里
   const pctWin = Math.max(10, Math.min(50, Math.floor(S.length / 3)));
   const P50 = rollingPercentile(e2e, pctWin, 50, Math.min(10, pctWin));
@@ -836,6 +846,9 @@ function renderDist(S) {
     if (cdfTop[i] !== null) carry = cdfTop[i];
     cdfData.push([i, +carry.toFixed(2)]);
   }
+  const qAt = (p) => sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))];
+  $('ch-dist').setAttribute('aria-label',
+    `延迟分布直方图与累积曲线。端到端 P50 ${fmtTime(qAt(50))}、P95 ${fmtTime(qAt(95))}，共 ${vals.length} 个样本`);
   charts.dist.setOption(UI.base({
     ...UI.anim(S.length),
     tooltip: { ...UI.tooltip(), trigger: 'axis' },

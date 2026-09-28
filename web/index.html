@@ -451,35 +451,35 @@
               <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
               <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
             </div></header>
-            <div class="panel-bd"><div class="chart" id="ch-e2e"></div></div>
+            <div class="panel-bd"><div class="chart" id="ch-e2e" role="img" aria-label="端到端延迟时序图"></div></div>
           </div>
           <div class="panel w5h2" data-panel="ttft">
             <header class="panel-hd"><h3>TTFT <span class="ph-note">time to first token · 与主图同一序列</span></h3><div class="panel-menu">
               <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
               <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
             </div></header>
-            <div class="panel-bd"><div class="chart" id="ch-ttft"></div></div>
+            <div class="panel-bd"><div class="chart" id="ch-ttft" role="img" aria-label="首字延迟时序图"></div></div>
           </div>
           <div class="panel w7h2" data-panel="tput">
             <header class="panel-hd"><h3>Throughput <span class="ph-note" id="tputNote"></span></h3><div class="panel-menu">
               <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
               <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
             </div></header>
-            <div class="panel-bd"><div class="chart" id="ch-tput"></div></div>
+            <div class="panel-bd"><div class="chart" id="ch-tput" role="img" aria-label="吞吐量时序图"></div></div>
           </div>
           <div class="panel w5h2" data-panel="dist">
             <header class="panel-hd"><h3>Latency distribution <span class="ph-note">直方图与累积曲线</span></h3><div class="panel-menu">
               <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
               <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
             </div></header>
-            <div class="panel-bd"><div class="chart" id="ch-dist"></div></div>
+            <div class="panel-bd"><div class="chart" id="ch-dist" role="img" aria-label="延迟分布直方图与累积曲线"></div></div>
           </div>
           <div class="panel w6" data-panel="tpot">
             <header class="panel-hd"><h3>TPOT <span class="ph-note">time per output token · 与主图同一序列</span></h3><div class="panel-menu">
               <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
               <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
             </div></header>
-            <div class="panel-bd"><div class="chart" id="ch-tpot"></div></div>
+            <div class="panel-bd"><div class="chart" id="ch-tpot" role="img" aria-label="逐字延迟时序图"></div></div>
           </div>
 
           <div class="panel w6" data-panel="heat">
@@ -487,7 +487,7 @@
               <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
               <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
             </div></header>
-            <div class="panel-bd"><div class="chart" id="ch-heat"></div><div class="rollup" id="heatRollup" hidden></div></div>
+            <div class="panel-bd"><div class="chart" id="ch-heat" role="img" aria-label="延迟热力图"></div><div class="rollup" id="heatRollup" hidden></div></div>
           </div>
 
           <div class="panel w5h2" data-panel="err">
@@ -495,14 +495,14 @@
               <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
               <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
             </div></header>
-            <div class="panel-bd"><div class="chart" id="ch-err"></div></div>
+            <div class="panel-bd"><div class="chart" id="ch-err" role="img" aria-label="失败分布图"></div></div>
           </div>
           <div class="panel w7h2" data-panel="cmp">
             <header class="panel-hd"><h3>Comparison <span id="cmpLegend" class="ph-note"></span></h3><div class="panel-menu">
               <button data-pm="png" title="导出 PNG" aria-label="导出 PNG"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>
               <button data-pm="full" title="全屏" aria-label="全屏"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
             </div></header>
-            <div class="panel-bd"><div class="chart" id="ch-cmp"></div></div>
+            <div class="panel-bd"><div class="chart" id="ch-cmp" role="img" aria-label="多轮轨迹对比图"></div></div>
           </div>
         </section>
 
