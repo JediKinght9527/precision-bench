@@ -53,6 +53,18 @@ function robustRange(values, pad = 0.12) {
     min = Math.floor((lo - span * pad) / step) * step;
     max = Math.ceil((hi + span * pad) / step) * step;
   }
+  // 下限别被取整抹成 0。延迟数据下界常常是 2s/6s 这种远离 0 的值，
+  // 但 floor 到整步长会把 min 压到 0，于是 80% 画布变成空白、真实波动被压扁。
+  // 只有数据确实贴近 0（lo 很小）时才保留 0 轴。
+  if (min <= 0 && lo > 0) {
+    min = nice(lo * 0.8);
+    if (min >= lo) min = nice(lo * 0.5);
+    // 抬高下限后格数可能超标，重新收敛一次
+    for (let i = 0; i < 8 && (max - min) / step > 6; i++) {
+      step = nice(step * 1.5);
+      max = Math.ceil((hi + span * pad) / step) * step;
+    }
+  }
   // interval 显式喂给 ECharts：value 轴不会再自作主张插 39.5/38.5 这种中间刻度
   return { min: +min.toFixed(4), max: +max.toFixed(4), interval: +step.toFixed(4) };
 }
@@ -179,7 +191,9 @@ const METRIC_DEFS = [
   ['成功 RPS', (s) => fmt(s.rps, 2), 'req/s', () => '', '成功请求速率 = 成功请求数 / 墙钟；尝试速率见详情'],
   ['Output tok/s', (s) => fmt(s.tokens.output_throughput, 1), 'tok/s', () => 'v-info', '总输出 token / 墙钟时长（与 vLLM、SGLang 口径一致）；单请求解码口径见详情'],
   ['Cache hit', (s) => { const d = cacheDisplay(s); return d.text; }, '', (s) => cacheDisplay(s).cls, '缓存命中率 = 命中输入 token / 总输入 token（token 口径）；请求 hit/miss 见判定块。随机化/过短 → n/a；渠道未上报字段 → n/a（非 0%）'],
-  ['Goodput', (s) => pct(s.goodput), '', (s) => s.goodput >= 0.9 ? 'v-ok' : 'v-warn', '达标请求占比（TTFT/E2E/TPOT 均≤合格线）；计入 SCORE（20 分）'],
+  // 分档补 v-bad：原来只有 ≥0.9 绿 / 否则黄两档，2% 的 goodput 只被标成"警告"，
+  // 和「Cost 未配置」看起来一样重 —— 而它其实是压倒性的失败。
+  ['Goodput', (s) => pct(s.goodput), '', (s) => s.goodput >= 0.9 ? 'v-ok' : s.goodput >= 0.6 ? 'v-warn' : 'v-bad', '达标请求占比（TTFT/E2E/TPOT 均≤合格线）；计入 SCORE（20 分）'],
   ['TPOT', (s) => (s.measurable && !s.measurable.tpot ? 'n/a' : s.ok ? fmtTime(s.tpot.mean) : '–'), '', (s, run) => (s.measurable && !s.measurable.tpot ? '' : latSlo(s, s.tpot.mean, runSlo(run).tpot_ms)), 'Time Per Output Token 每 token 时间（均值着色用侧栏 tpot 合格线；判定块用 P95）'],
   ['ITL P99', (s) => (s.measurable && !s.measurable.itl ? 'n/a' : s.ok ? fmtTime(s.itl.p99) : '–'), '', () => '', 'Inter-Token Latency 相邻 token 间隔的 P99（非流式不可测）'],
   ['E2EL P50', (s) => lvT(s, s.e2e.p50), '', () => '', 'End-to-End Latency 端到端 P50'],
@@ -449,7 +463,9 @@ function renderSingle(run) {
   charts.e2e.setOption(UI.base({
     tooltip: UI.tooltip('ms'),
     legend: { right: 8, top: 0, itemWidth: 14, itemHeight: 3, textStyle: { color: C.tx2, fontSize: 11 }, selected: dense ? { raw: false } : {}, data: run.mode === 'open' ? ['raw', 'P50', 'P95', 'corrected'] : ['raw', 'P50', 'P95'] },
-    xAxis: { type: 'category', boundaryGap: false, data: seqCat, name: 'seq', nameTextStyle: { color: C.tx3, fontSize: 10 }, axisLabel: { ...AXIS, interval: 'auto', hideOverlap: true }, axisLine: { lineStyle: { color: C.line2 } }, splitLine: { show: false } },
+    // 刻度密度与其余时序图统一（原来用 interval:'auto'，100 个样本会排出 11 个刻度，
+    // 末尾标签还被容器裁掉一半）
+    xAxis: { type: 'category', boundaryGap: false, data: seqCat, name: 'seq', nameTextStyle: { color: C.tx3, fontSize: 10 }, axisLabel: { ...AXIS, hideOverlap: true, interval: Math.max(0, Math.ceil(S.length / 6) - 1) }, axisLine: { lineStyle: { color: C.line2 } }, splitLine: { show: false } },
     yAxis: { type: 'value', scale: true, splitNumber: 4, nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: UI.axisLabelFor(e2e, 'ms'), name: (UI.axisLabelFor(e2e, 'ms').name || 'ms'), ...robustRange(e2e), axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
     series: [
       // 分位带：整段 polygon（P95 上沿 + P50 下沿），避免逐点半透明矩形叠出栅栏条纹
@@ -464,7 +480,7 @@ function renderSingle(run) {
               kids.push({
                 type: 'polygon',
                 shape: { points: top.concat(bot.slice().reverse()) },
-                style: { fill: UI.grad(C.tr3, .07, 0), stroke: 'none' },
+                style: { fill: UI.grad(C.tr3, .05, 0), stroke: C.tr3, lineWidth: 0.5, strokeOpacity: .18 },
               });
             }
             top = []; bot = [];
@@ -480,9 +496,12 @@ function renderSingle(run) {
           return { type: 'group', children: kids };
         },
       }] : []),
-      { name: 'raw', type: 'scatter', symbolSize: dense ? 2 : 4, data: e2e, itemStyle: { color: '#8a8a8a', opacity: dense ? .12 : .24 }, z: 3},
-      ln('P50', P50, C.tr1, 1.6, { z: 4 }),
-      ln('P95', P95, C.tr3, 1.4, { lineStyle: { color: C.tr3, width: 1.4, type: 'dashed' }, z: 4 }),
+      // opacity 压到 .15：100 个点在 700px 宽度上会连成点阵纹理，比 P50/P95 本身还抢眼
+      // 有分位带时 raw 退到背景层：100 个点会连成点阵纹理，和带子糊成一块实心区域，
+      // 反过来抢掉 P50/P95 的注意力。size 2 + opacity .10 只留一个"这里有样本"的暗示。
+      { name: 'raw', type: 'scatter', symbolSize: 2, data: e2e, itemStyle: { color: '#8a8a8a', opacity: S.length >= MIN_BAND ? .10 : (dense ? .12 : .22) }, z: 2 },
+      ln('P50', P50, C.tr1, 2, { z: 5 }),
+      ln('P95', P95, C.tr3, 1.8, { lineStyle: { color: C.tr3, width: 1.8, type: 'dashed' }, z: 5 }),
       ...(run.mode === 'open'
         ? [ln('corrected', S.map((s) => s.corrected_e2e_ms), C.tr2, 1.2, { lineStyle: { color: C.tr2, width: 1.2, type: 'dashed' }, z: 2 })]
         : []),
@@ -630,6 +649,23 @@ function renderDist(S) {
   const hist = new Array(nb).fill(0);
   vals.forEach((v) => { hist[Math.min(nb - 1, Math.floor((v - min) / step))]++; });
   const sorted = [...vals].sort((a, b) => a - b);
+  // CDF 必须按分箱对齐到 category 轴的索引上。
+  // 之前给的是 [原始毫秒, 百分比]（如 [1924.094…, 1]），而 xAxis 是
+  // category(['1924','2202',…]) —— ECharts 按字符串严格匹配，'1924' 不等于
+  // '1924.094…'，于是 100 个点全部落空，曲线从来没画出来过。
+  const cdfTop = new Array(nb).fill(null);
+  sorted.forEach((v, i) => {
+    const bi = Math.min(nb - 1, Math.max(0, Math.floor((v - min) / step)));
+    const pct = ((i + 1) / sorted.length) * 100;
+    if (cdfTop[bi] === null) cdfTop[bi] = pct;
+  });
+  // 空箱沿用前一个值，保证 CDF 单调不回落
+  const cdfData = [];
+  let carry = 0;
+  for (let i = 0; i < nb; i++) {
+    if (cdfTop[i] !== null) carry = cdfTop[i];
+    cdfData.push([i, +carry.toFixed(2)]);
+  }
   charts.dist.setOption(UI.base({
     tooltip: { ...UI.tooltip(), trigger: 'axis' },
     grid: { left: 52, right: 50, top: 26, bottom: 30 },
@@ -639,7 +675,7 @@ function renderDist(S) {
       { type: 'value', name: 'CDF %', max: 100, nameLocation: 'middle', nameRotate: 90, nameGap: 38, nameTextStyle: { color: C.tr3, fontSize: 11 }, axisLabel: { ...AXIS, color: C.tr3, margin: 6 }, axisLine: { show: true, lineStyle: { color: C.tr3, opacity: .35 } }, splitLine: { show: false } }],
     series: [
       { name: '直方图', type: 'bar', data: hist, itemStyle: { color: UI.grad(C.tr4, .85, .3), borderRadius: [4, 4, 0, 0] } },
-      { name: 'CDF', type: 'line', yAxisIndex: 1, showSymbol: false, smooth: true, data: sorted.map((v, i) => [v, ((i + 1) / sorted.length) * 100]), lineStyle: { color: C.tr3, width: 1.8 } },
+      { name: 'CDF', type: 'line', yAxisIndex: 1, showSymbol: false, step: 'end', data: cdfData, z: 5, lineStyle: { color: C.tr3, width: 2 } },
     ],
   }), true);
 }
