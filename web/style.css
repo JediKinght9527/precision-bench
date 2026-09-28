@@ -1759,7 +1759,7 @@ body.panel-resizing .panel-bd,
 body.panel-resizing .rollup { pointer-events: none; }
 
 /* tabs */
-.tabs-hd { padding-left: var(--s-1); }
+.tabs-hd { padding-left: var(--s-1); padding-right: var(--s-3); }
 .tabs { display: flex; gap: 0; }
 .tabs button {
   height: 34px;
@@ -1859,6 +1859,9 @@ table.grid td {
   vertical-align: middle;
   color: var(--tx-2);
   line-height: 1.45;
+  /* 整格都用等宽数字：运行记录里多数单元格含数字，
+     非数字列（渠道名/模型名）不受影响，因为等宽数字只影响数字字形宽度 */
+  font-variant-numeric: tabular-nums;
 }
 table.grid td:first-child { color: var(--tx-1); }
 table.grid tbody tr:hover td { background: var(--bg-3); }

@@ -180,7 +180,7 @@ async function startRun() {
     syncBenchControls();
     $('b-itemsBody').innerHTML = '';
     $('b-progress').textContent = '0/0';
-    renderVerdict({ verdict: 'running' }); ensureCharts(); UI.noData($('b-ch-dims'), 'No data'); UI.noData($('b-ch-trend'));
+    renderVerdict({ verdict: 'running' }); ensureCharts(); UI.noData($('b-ch-dims'), '等待检测', '开始一次降智检测后这里会显示各维度得分'); UI.noData($('b-ch-trend'), '等待第二次检测', '至少两次检测后可看维度得分的变化');
     if (state.sse) state.sse.close();
     state.lastEventId = 0;
     state.seenItems.clear();
@@ -308,7 +308,11 @@ function renderVerdict(s) {
 function renderDimChart(s) {
   if (!dimChart) return;
   const dims = Object.entries(s.dims || {});
-  if (!dims.length) { UI.noData($('b-ch-dims'), 'No data'); return; }
+  if (!dims.length) { UI.noData($('b-ch-dims'), '未开始检测', '先在左侧配置题集与检测维度'); return; }
+  // canvas 对读屏软件不可见，把最低分维度写进 aria-label
+  $('b-ch-dims').setAttribute('aria-label',
+    `降智检测维度得分。共 ${dims.length} 个维度，最低分：` +
+    dims.map(([, v]) => `${v.name} ${(v.score * 100).toFixed(0)} 分`).sort((a, b) => parseFloat(a.split(' ').pop()) - parseFloat(b.split(' ').pop()))[0]);
   const names = dims.map(([, v]) => v.name);
   const vals = dims.map(([, v]) => +(v.score * 100).toFixed(1));
   // 95% Wilson 置信区间：区间越宽 = 题量越不足，一眼能看出结论的可信度
@@ -341,12 +345,12 @@ function renderDimChart(s) {
 function renderTrend(s) {
   if (!trendChart) return;
   const run = state.runs.find((r) => r.run_id === state.current);
-  if (!run) { UI.noData($('b-ch-trend')); return; }
+  if (!run) { UI.noData($('b-ch-trend'), '等待第二次检测', '至少两次检测后可看维度得分的变化'); return; }
   const same = state.runs
     .filter((r) => r.base_url_masked === run.base_url_masked && r.model === run.model)
     .filter((r) => !run.task_key || r.task_key === run.task_key)
     .sort((a, b) => a.ts - b.ts);
-  if (!same.length) { UI.noData($('b-ch-trend')); return; }
+  if (!same.length) { UI.noData($('b-ch-trend'), '等待第二次检测', '至少两次检测后可看维度得分的变化'); return; }
 
   const pts = same.map((r) => +((r.total_score || 0) * 100).toFixed(1));
   const labels = same.map((r) => hm(r.ts));
@@ -533,7 +537,7 @@ $('btnBenchDemo').onclick = () => { $('b-paste').value = 'base_url: https://api.
 
 renderVerdict({ verdict: 'idle' });
 syncBenchControls();
-UI.noData($('b-ch-dims'), 'No data'); UI.noData($('b-ch-trend'));
+UI.noData($('b-ch-dims'), '等待检测', '开始一次降智检测后这里会显示各维度得分'); UI.noData($('b-ch-trend'), '等待第二次检测', '至少两次检测后可看维度得分的变化');
 loadDims();
 loadHistory();
 })();
