@@ -19,10 +19,12 @@
     tr1: _v('--tr-1', '#f0b429'), tr2: _v('--tr-2', '#fcd34d'), tr3: _v('--tr-3', '#7395be'),
     tr4: _v('--tr-4', '#b45309'), tr5: _v('--tr-5', '#9687c5'),
     /* 琥珀主系列 + 冷色辅助，语义色垫底防撞 */
+    // 上限 6 色（Datadog Classic 调色板同款约束）：超过 6 个系列时循环取色，
+    // 而不是继续加新色相 —— 超过 6 色后颜色就不再携带信息，只增加噪音。
     series: [
-      _v('--tr-1', '#f0b429'), _v('--tr-2', '#fcd34d'), _v('--tr-3', '#7395be'),
-      _v('--tr-4', '#b45309'), _v('--tr-5', '#9687c5'),
-      _v('--bad', '#f06464'), _v('--warn', '#f59e0b'), _v('--info', '#6aa5f7'),
+      _v('--tr-1', '#f0b429'), _v('--tr-2', '#e0a92a'), _v('--tr-3', '#c98a24'),
+      _v('--tr-4', '#a86c1e'), _v('--tr-5', '#7395be'),
+      _v('--info', '#6aa5f7'),
     ],
     bg0: _v('--bg-0', '#0e1014'), bg1: _v('--bg-1', '#12151b'),
   };
@@ -30,20 +32,25 @@
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
   const _nfCache = new Map();
-  const nf = (nd) => {
-    if (!_nfCache.has(nd)) _nfCache.set(nd, new Intl.NumberFormat('zh-CN', { minimumFractionDigits: nd, maximumFractionDigits: nd }));
-    return _nfCache.get(nd);
+  const nf = (nd, grouping = true) => {
+    const key = `${nd}:${grouping}`;
+    if (!_nfCache.has(key)) _nfCache.set(key, new Intl.NumberFormat('zh-CN', { minimumFractionDigits: nd, maximumFractionDigits: nd, useGrouping: grouping }));
+    return _nfCache.get(key);
   };
   const fmt = (v, nd = 0) => (v == null || Number.isNaN(Number(v)) ? '–' : nf(nd).format(Number(v)));
   const pct = (v) => (v == null ? '–' : (v * 100).toFixed(1) + '%');
-  /* 毫秒自适应：≥1s 显示秒，否则按量级选小数位 —— 判定块/读数/表格共用 */
+  /* 毫秒自适应：判定块/读数/表格/图表轴共用。
+     两条规则避免读数在量级边界"跳"：
+       1) 100–999ms 段关闭千分位 —— 否则 999.5 四舍五入成 "1,000 ms"，
+          紧接着 1000 又是 "1.00 s"，相邻样本跳两次还多个逗号
+       2) 秒段统一 2 位小数 —— 原先 ≥10s 用 1 位、≥1s 用 2 位，
+          在 10.00 s → 10.0 s 处精度突变 */
   const fmtTimeParts = (ms) => {
     if (ms == null || ms === '' || Number.isNaN(Number(ms))) return { v: '–', u: '' };
     const n = Number(ms);
     const a = Math.abs(n);
-    if (a >= 10000) return { v: nf(1).format(n / 1000), u: 's' };
     if (a >= 1000) return { v: nf(2).format(n / 1000), u: 's' };
-    if (a >= 100) return { v: nf(0).format(n), u: 'ms' };
+    if (a >= 100) return { v: nf(0, false).format(n), u: 'ms' };
     if (a >= 10) return { v: nf(1).format(n), u: 'ms' };
     if (a >= 1) return { v: nf(2).format(n), u: 'ms' };
     if (a === 0) return { v: '0', u: 'ms' };

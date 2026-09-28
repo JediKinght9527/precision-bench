@@ -520,7 +520,9 @@ function renderCards(sum) {
   // 完全重复（同屏三处）。这里改为一行阈值——chip 独有、别处没有的信息。
   // 合格线是用户填的设置值，不是测量值：去掉 fmtTime 的尾随 .0
   // （"逐字 ≤50.0 ms" 会暗示不存在的测量精度）
-  const fmtSlo = (ms) => fmtTime(ms).replace(/\.0(?=\s|$)/, '');
+  // 合格线是用户填的整数设置值，去掉全部尾随零（"5.00 s"→"5 s"、"50.0 ms"→"50 ms"），
+  // 免得暗示不存在的测量精度；同一行里小数位也能齐平。
+  const fmtSlo = (ms) => fmtTime(ms).replace(/(\.\d*?[1-9])0+(?= |$)/, '$1').replace(/\.0+(?= |$)/, '');
   const slo = runSlo(run);
   $('vbSlo').innerHTML =
     `<span class="slo-cap">合格线</span>` +
