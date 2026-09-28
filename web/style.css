@@ -1403,10 +1403,17 @@ body.has-data #perfDash:not([hidden]) .panel-grid > .panel:nth-child(6) { animat
   100% { text-shadow: 0 0 0 transparent; }
 }
 
+/* 读数区右侧原本比左侧判定块矮，导致右下角空出 ~93px（面板高度的 28%），
+   观感像"没排完"。这里让 .metrics 吃掉 .readout 剩下的高度，
+   并把 4 列时的多出行数摊开填满；窄视口（2/3 列）本来就接近等高，
+   靠 min-height 下限防止被压扁。 */
 .metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--s-3) var(--s-5);
+  flex: 1 1 auto;
+  align-content: space-between;
+  min-height: 0;
 }
 @media (max-width: 1420px) {
   .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
