@@ -337,8 +337,38 @@ function renderCards(sum) {
     const extra = empty ? ' is-empty' : '';
     return `<div class="${box}${extra} ${cls ? cls(sum, run) : ''}"><dt title="${esc(hint || '')}">${k}</dt><dd>${v}${showUnit ? ` <em>${unit}</em>` : ''}</dd></div>`;
   };
-  $('roPrimary').innerHTML = PRIMARY_DEFS.map(([k, get, unit, cls, hint]) => cell(k, get, unit, cls, 'ro-item', hint)).join('');
-  $('metrics').innerHTML = METRIC_DEFS.map(([k, get, unit, cls, hint]) => cell(k, get, unit, cls, 'metric', hint)).join('');
+  /* live summary 每秒推一次，若每次都 innerHTML 重建，3+12 个格子会整块闪一下。
+     这里只在首次（或格子数量/顺序变化）时建结构，之后仅改变化的数值文本，
+     配合 CSS 的 dd 过渡，数字变化才是"平滑更新"而不是"重排闪烁"。 */
+  const paint = (id, defs, box) => {
+    const host = $(id);
+    const want = defs.length;
+    if (host.childElementCount !== want) {
+      host.innerHTML = defs.map(([k, get, unit, cls, hint]) => cell(k, get, unit, cls, box, hint)).join('');
+      return;
+    }
+    defs.forEach(([k, get, unit, cls, hint], i) => {
+      const el = host.children[i];
+      let v = '–';
+      try { v = get(sum); } catch { v = '–'; }
+      const empty = v === '–' || v === 'n/a' || v === '未配置';
+      const dd = el.querySelector('dd');
+      if (!dd) return;
+      const want2 = `${v}${unit && !empty ? ` <em>${unit}</em>` : ''}`;
+      if (dd.dataset.v !== String(v)) {
+        dd.dataset.v = String(v);
+        dd.innerHTML = want2;
+        dd.classList.remove('dd-bump');
+        void dd.offsetWidth;            // 强制回流，让下面的动画能重新触发
+        dd.classList.add('dd-bump');
+      }
+      el.classList.toggle('is-empty', empty);
+      const kls = `${box} ${cls ? cls(sum, run) : ''}`;
+      if (el.className !== kls) el.className = kls;
+    });
+  };
+  paint('roPrimary', PRIMARY_DEFS, 'ro-item');
+  paint('metrics', METRIC_DEFS, 'metric');
 
   // 无成功样本时延迟无意义：不显示 44px 的「0」（大白 0 会像一块白斑）
   const p95 = (sum.ok > 0 && sum.e2e && sum.e2e.p95 != null) ? sum.e2e.p95 : null;
@@ -492,6 +522,7 @@ function renderSingle(run) {
     UI.noData($('ch-e2e'), '无成功样本 · 延迟不可测');
   } else {
   charts.e2e.setOption(UI.base({
+    ...UI.anim(S.length),
     tooltip: UI.tooltip('ms'),
     legend: { right: 8, top: 0, itemWidth: 14, itemHeight: 3, textStyle: { color: C.tx2, fontSize: 11 }, selected: dense ? { raw: false } : {}, data: run.mode === 'open' ? ['raw', 'P50', 'P95', 'corrected'] : ['raw', 'P50', 'P95'] },
     // 刻度密度与其余时序图统一（原来用 interval:'auto'，100 个样本会排出 11 个刻度，
@@ -545,6 +576,7 @@ function renderSingle(run) {
     UI.noData($('ch-ttft'), '无 TTFT 样本 · 全部失败或非流式');
   } else {
   charts.ttft.setOption(UI.base({
+    ...UI.anim(S.length),
     tooltip: UI.tooltip('ms'),
     xAxis: { type: 'category', boundaryGap: false, data: seqCat, axisLabel: { ...AXIS, hideOverlap: true, interval: Math.max(0, Math.ceil(S.length / 6) - 1) }, axisLine: { lineStyle: { color: C.line2 } }, splitLine: { show: false }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
     yAxis: { type: 'value', scale: true, splitNumber: 4, nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: UI.axisLabelFor(ttft, 'ms'), name: (UI.axisLabelFor(ttft, 'ms').name || 'ms'), ...robustRange(ttft), axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
@@ -556,6 +588,7 @@ function renderSingle(run) {
     UI.noData($('ch-tpot'), '无 TPOT 样本 · 全部失败或非流式');
   } else {
   charts.tpot.setOption(UI.base({
+    ...UI.anim(S.length),
     tooltip: UI.tooltip('ms'),
     xAxis: { type: 'category', boundaryGap: false, data: seqCat, axisLabel: { ...AXIS, hideOverlap: true, interval: Math.max(0, Math.ceil(S.length / 6) - 1) }, axisLine: { lineStyle: { color: C.line2 } }, splitLine: { show: false }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
     yAxis: { type: 'value', scale: true, splitNumber: 4, nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: UI.axisLabelFor(tpot, 'ms'), name: (UI.axisLabelFor(tpot, 'ms').name || 'ms'), ...robustRange(tpot), axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
@@ -572,6 +605,7 @@ function renderSingle(run) {
     const winMs = Math.max(5000, pickBucketMs(S));
     const [rpsArr, tokArr] = windowedRate(S, winMs);
     charts.tput.setOption(UI.base({
+    ...UI.anim(S.length),
       tooltip: UI.tooltip(),
       grid: { left: 54, right: 52, top: 26, bottom: 30 },
       legend: { right: 8, top: 0, itemWidth: 14, itemHeight: 3, textStyle: { color: C.tx2, fontSize: 10 } },
@@ -602,6 +636,7 @@ function renderErrors(S) {
   if (!classes.length) { UI.noData($('ch-err'), 'No errors'); return; }
   const buckets = bucketize(S, bk, (a) => a);
   charts.err.setOption(UI.base({
+    ...UI.anim(S.length),
     tooltip: { ...UI.tooltip(), trigger: 'axis' },
     legend: { right: 8, top: 0, itemWidth: 14, itemHeight: 3, textStyle: { color: C.tx2, fontSize: 10 } },
     xAxis: { type: 'category', boundaryGap: false, data: buckets.map(([b]) => fmtB(b / 1000)), axisLabel: { ...AXIS, hideOverlap: true, interval: Math.max(0, Math.ceil(buckets.length / 6) - 1) }, axisLine: { lineStyle: { color: C.line2 } }, splitLine: { show: false } },
@@ -632,6 +667,7 @@ function renderHeat(S) {
   const max = Math.max(1, ...data.map((d) => d[2]));
   const f = bucketLabel(bk);
   charts.heat.setOption(UI.base({
+    ...UI.anim(S.length),
     tooltip: { ...UI.tooltip(), trigger: 'item', position: 'top' }, grid: { left: 66, right: 14, top: 8, bottom: 26 },
     xAxis: { type: 'category', data: buckets.map(([b]) => f(b / 1000)), axisLabel: { ...AXIS, hideOverlap: true, interval: Math.max(0, Math.ceil(buckets.length / 8) - 1) }, axisLine: { lineStyle: { color: C.line2 } }, splitLine: { show: false } },
     yAxis: { type: 'category', name: '延迟', nameTextStyle: { color: C.tx3, fontSize: 11 }, data: ys.map((y) => yLabels[y]), axisLabel: AXIS, axisLine: { show: false }, splitLine: { show: false } },
@@ -698,6 +734,7 @@ function renderDist(S) {
     cdfData.push([i, +carry.toFixed(2)]);
   }
   charts.dist.setOption(UI.base({
+    ...UI.anim(S.length),
     tooltip: { ...UI.tooltip(), trigger: 'axis' },
     grid: { left: 52, right: 50, top: 26, bottom: 30 },
     legend: { right: 8, top: 0, itemWidth: 14, itemHeight: 3, textStyle: { color: C.tx2, fontSize: 10 } },
@@ -731,6 +768,7 @@ function renderCompareChart() {
   }).filter(Boolean);
   if (!series.length) { UI.noData($('ch-cmp'), '无成功样本 · 暂无可对比轨迹'); return; }
   charts.cmp.setOption(UI.base({
+    ...UI.anim(S.length),
     tooltip: UI.tooltip('ms'),
     // 图例放底部：多条轨迹时顶部会盖住波形
     legend: { bottom: 0, left: 'center', itemWidth: 14, itemHeight: 3,

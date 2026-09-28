@@ -636,6 +636,19 @@
 
 <script>
   (function () {
+    /* 视图进场：淡入 + 4px 上浮。放在 WAAPI 里做，因为视图切换靠 hidden 属性
+       控制显示，纯 CSS transition 无法在 display 切换上稳定触发。
+       prefers-reduced-motion 下完全跳过（该媒体查询已全局关掉 CSS 动画）。 */
+    const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)');
+    function animateViewIn(id) {
+      if (REDUCED.matches) return;
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.animate(
+        [{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }],
+        { duration: 240, easing: 'cubic-bezier(.22,.8,.28,1)' }
+      );
+    }
     function switchView(view) {
       document.querySelectorAll('.rail-item[data-view]').forEach(a => a.classList.toggle('on', a.dataset.view === view));
       document.getElementById('side-perf').hidden = view !== 'perf';
@@ -648,6 +661,7 @@
       document.querySelectorAll('.perfonly').forEach(e => e.hidden = view !== 'perf');
       document.querySelectorAll('.benchonly').forEach(e => e.hidden = view !== 'bench');
       window.dispatchEvent(new CustomEvent('viewchange', { detail: { view } }));
+      animateViewIn('view-' + view);
     }
     document.querySelectorAll('.rail-item[data-view]').forEach(a => {
       a.addEventListener('click', () => { switchView(a.dataset.view); history.replaceState(null, '', a.dataset.view === 'perf' ? '/' : '#bench'); });

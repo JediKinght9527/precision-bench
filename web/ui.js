@@ -167,6 +167,14 @@
              formatter: (v) => `${+(Number(v).toFixed(nd))}${unit}` };
   }
 
+  /* 图表动效：入场不做动画（首屏要立刻出图），但 live 更新走 260ms 过渡，
+     否则每秒一次的 setOption 会让曲线瞬变、观感"硬切"。
+     样本量超过 ANIM_MAX 时自动关闭更新动画，避免 4000 点每秒重算掉帧。 */
+  const ANIM_MAX = 800;
+  const anim = (n) => (n > ANIM_MAX
+    ? { animation: false }
+    : { animationDurationUpdate: 260, animationEasingUpdate: 'cubicOut', animationDuration: 0 });
+
   const base = (extra = {}) => ({
     backgroundColor: 'transparent', animation: false, grid: GRID, textStyle: { fontSize: 12 },
     xAxis: { type: 'value', nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: AXIS, axisLine: { lineStyle: { color: C.line2 } }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } }, splitLine: GRAT, minorTick: { show: true, splitNumber: 5 }, minorSplitLine: MINOR },
@@ -605,7 +613,7 @@
 
   window.UI = {
     C, AXIS, SPLIT, GRAT, MINOR, GRID, fmt, pct, fmtTime, fmtTimeParts, tstr, hm, dtstr, nowTime, esc, grad, hexA,
-    tooltip, base, initChart, noData, axisLabelFor,
+    tooltip, base, anim, initChart, noData, axisLabelFor,
     toast, setBusy, openModal, closeModal, confirm: confirmBox,
     openDrawer, closeDrawer, sortable, setPaletteProvider, openPalette,
     enhanceNumerics,

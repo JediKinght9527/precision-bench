@@ -93,10 +93,14 @@
   --top-h: 48px;
   --ctl-h: 32px;
 
-  /* 动效 */
-  --t-fast: 100ms;
-  --t-base: 150ms;
+  /* 动效：统一时长与缓动令牌（此前只有 2 个时长 + 1 个缓动，导致动效无系统） */
+  --t-fast: 100ms;    /* 悬停 / 按压 */
+  --t-base: 150ms;    /* 控件状态 */
+  --t-slow: 240ms;    /* 视图切换 / 面板展开 */
+  --t-xslow: 400ms;   /* 数字滚动 / 图表入场 */
   --ease: cubic-bezier(0, 0, .2, 1);
+  --ease-out: cubic-bezier(.22, .8, .28, 1);   /* 进场：快起慢收 */
+  --ease-in-out: cubic-bezier(.4, 0, .2, 1);    /* 位移 / 双向过渡 */
 }
 
 /* ═══════════ 自托管字体（IBM Plex Sans / Mono，OFL）═══════════
@@ -1387,6 +1391,17 @@ body.has-data #perfDash:not([hidden]) .panel-grid > .panel:nth-child(6) { animat
   font-weight: 500;
 }
 .ro-item.is-empty dt { color: var(--tx-4); }
+
+/* 数值变化提示：live summary 每秒更新，值真的变了就让数字轻微提亮再回落。
+   读数面板上动效必须克制，所以只提亮、不位移不缩放。
+   用 currentColor 的透明度叠加实现，避免覆盖 v-ok/v-bad 各自的语义色。 */
+.ro-item dd, .metric dd { position: relative; }
+.dd-bump { animation: dd-bump var(--t-slow) var(--ease-out); }
+@keyframes dd-bump {
+  0%   { text-shadow: 0 0 0 var(--acc); }
+  35%  { text-shadow: 0 0 10px var(--acc); }
+  100% { text-shadow: 0 0 0 transparent; }
+}
 
 .metrics {
   display: grid;
