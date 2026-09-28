@@ -196,7 +196,7 @@ function cacheDisplay(sum) {
   if (run && run.randomize && !run.cacheMode) return { text: 'n/a', cls: '' };
   if (run && run.promptMode === 'tiny') return { text: 'n/a', cls: '' };
   if (sum.cache.reported === false && !(sum.cache.cached_tokens > 0)) {
-    return { text: 'n/a', cls: '', tip: '渠道未上报缓存字段（reported=false），命中率无法测得——见判定块说明或用「缓存检测」主动探测' };
+    return { text: 'n/a', cls: '', tip: '渠道未上报缓存字段（reported=false），命中率无法测得，见判定块说明或用「缓存检测」主动探测' };
   }
   const r = sum.cache.hit_rate;
   return { text: pct(r), cls: r > 0 ? 'v-ok' : '' };
@@ -215,8 +215,8 @@ const runSlo = (run) => Object.assign({}, SLO_DEF, (run && run.slo) || {});
 const latSlo = (s, v, limit) => (s.failed > 0 || limit == null ? '' : v <= limit ? 'v-ok' : v <= limit * 1.5 ? 'v-warn' : 'v-bad');
 const PRIMARY_DEFS = [
   ['Success rate', (s) => pct(s.success_rate), '', (s) => s.success_rate >= 0.99 ? 'v-ok' : s.success_rate >= 0.95 ? 'v-warn' : 'v-bad', '请求成功率'],
-  ['TTFT P95', (s) => lvT(s, s.ttft.p95), '', (s, run) => latSlo(s, s.ttft.p95, runSlo(run).ttft_ms), 'Time To First Token 首字延迟 P95（与判定同口径：合格线见侧栏「合格线 · 延迟」）'],
-  ['E2EL P95', (s) => lvT(s, s.e2e.p95), '', (s, run) => latSlo(s, s.e2e.p95, runSlo(run).e2e_ms), 'End-to-End Latency 端到端 P95（与判定同口径：合格线见侧栏「合格线 · 延迟」）'],
+  ['TTFT P95', (s) => lvT(s, s.ttft.p95), '', (s, run) => latSlo(s, s.ttft.p95, runSlo(run).ttft_ms), 'Time To First Token 首字延迟 P95（与判定同口径：合格线见侧栏「合格线 · 成本」区内的首字/端到端）'],
+  ['E2EL P95', (s) => lvT(s, s.e2e.p95), '', (s, run) => latSlo(s, s.e2e.p95, runSlo(run).e2e_ms), 'End-to-End Latency 端到端 P95（与判定同口径：合格线见侧栏「合格线 · 成本」区内的首字/端到端）'],
 ];
 const METRIC_DEFS = [
   ['成功 RPS', (s) => fmt(s.rps, 2), 'req/s', () => '', '成功请求速率 = 成功请求数 / 墙钟；尝试速率见详情'],
@@ -392,7 +392,7 @@ function renderCards(sum) {
   if (cd.text === 'n/a') {
     cacheLine = '　Cache hit n/a（随机化/过短或渠道未上报字段，不可测）';
     if (run && run.randomize) {
-      cacheLine += '。「随机化请求」已开启会破坏前缀——测缓存请关闭，或用「缓存检测」按钮';
+      cacheLine += '。「随机化请求」已开启会破坏前缀。测缓存请关闭，或用「缓存检测」按钮';
     } else if (cd.tip) {
       cacheLine += `。${cd.tip}`;
     }
@@ -408,7 +408,7 @@ function renderCards(sum) {
     } else {
       cacheLine = '　Cache hit 0%（渠道已上报缓存字段，本轮全部未命中）';
       if ($('randomize')?.checked) {
-        cacheLine += '。注意：「随机化请求」已开启，每次前缀都不同，缓存必然不命中——测缓存请关闭它，或改用「缓存检测」按钮';
+        cacheLine += '。注意：「随机化请求」已开启，每次前缀都不同，缓存必然不命中。测缓存请关闭它，或改用「缓存检测」按钮';
       } else if (($('input_tokens')?.value | 0) < 256) {
         cacheLine += '。注意：输入 token 数偏小（低于常见缓存门槛），建议 ≥1024 再观察命中';
       } else {
@@ -1890,7 +1890,7 @@ function initPanelResize() {
     hnd.setAttribute('role', 'separator');
     hnd.setAttribute('aria-orientation', 'horizontal');
     hnd.setAttribute('tabindex', '0');
-    hnd.title = '拖边缘调高 · 拖右缘/角点调宽 · 双击复位 · ↑/↓ 微调';
+    hnd.title = '拖边缘调高，拖右缘或角点调宽，双击复位，↑/↓ 微调';
     panel.appendChild(hnd);
 
     const isGrid = !panel.classList.contains('bottom-panel');
@@ -1901,14 +1901,14 @@ function initPanelResize() {
       whnd.setAttribute('role', 'separator');
       whnd.setAttribute('aria-orientation', 'vertical');
       whnd.setAttribute('tabindex', '0');
-      whnd.title = '拖拽调整宽度（列数） · 双击复位';
+      whnd.title = '拖拽调整宽度（列数），双击复位';
       panel.appendChild(whnd);
     }
     const cnd = document.createElement('div');
     cnd.className = 'rs-c';
     cnd.setAttribute('role', 'separator');
     cnd.setAttribute('tabindex', '0');
-    cnd.title = '角点拖拽：同时调宽高 · 双击复位';
+    cnd.title = '角点拖拽：同时调宽高，双击复位';
     panel.appendChild(cnd);
 
     const applyH = (px) => {
