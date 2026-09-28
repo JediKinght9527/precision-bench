@@ -2434,3 +2434,386 @@ main {
 
 /* 面板标题不整段染绿；主图序号/说明保持灰 */
 .panel-hd h3 { color: var(--tx-1); }
+
+/* ---------- 带档位的数字输入（滑杆 + 精确输入） ----------
+   侧栏本来就窄，所以滑杆压到 16px 高、档位标签 10px。
+   数字框保持原样可编辑 —— 需要精确值时直接打字，滑杆的吸附逻辑不参与。 */
+.numfield {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 3px;
+  /* 档位标签行紧贴下一个字段的标题会显得挤, 留一点呼吸 */
+  margin-bottom: 3px;
+}
+.numfield > input[type="number"] { width: 100%; }
+
+.numfield-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 16px;
+  margin: 0;
+  background: transparent;
+  cursor: ew-resize;
+  border: 0;
+}
+.numfield-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+}
+.numfield-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  margin-top: -5.5px;
+  border-radius: 50%;
+  background: var(--tx-1);
+  border: 2px solid var(--bg-1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .5);
+  transition: background var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+}
+.numfield-range:hover::-webkit-slider-thumb { background: var(--acc); }
+.numfield-range:active::-webkit-slider-thumb { transform: scale(1.15); }
+.numfield-range:focus-visible { outline: none; }
+.numfield-range:focus-visible::-webkit-slider-thumb {
+  background: var(--acc);
+  box-shadow: 0 0 0 3px rgba(240, 180, 41, .25);
+}
+.numfield-range::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+}
+.numfield-range::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--tx-1);
+  border: 2px solid var(--bg-1);
+}
+.numfield-range:hover::-moz-range-thumb { background: var(--acc); }
+
+/* 档位标记：中间档位是一根 6px 高的刻度线（不写文字），两端才显示数值。
+   侧栏窄栏里绝对定位的数字标签必然互相碰撞，这样最坏情况也只是刻度变稀。 */
+.numfield-ticks {
+  position: relative;
+  height: 14px;
+  margin: 1px 6px 0;
+}
+.numfield-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--tx-3);
+  font-size: 10px;
+  line-height: 13px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+  white-space: nowrap;
+}
+.numfield-tick.is-end:first-child { transform: translateX(-20%); }
+.numfield-tick.is-end:last-child { transform: translateX(-80%); }
+.numfield-tick.is-end:hover { color: var(--acc); }
+/* 中间刻度线：加宽透明命中区，指针/点击都好用，但不占视觉宽度 */
+.numfield-tick.is-mark {
+  width: 12px;
+  height: 13px;
+  margin-left: -6px;
+  background: linear-gradient(var(--line-3), var(--line-3)) center 0 / 1px 5px no-repeat;
+  border-radius: 1px;
+}
+.numfield-tick.is-mark:hover { background-image: linear-gradient(var(--acc), var(--acc)); }
+
+.numfield-tick[data-hide="1"] { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+/* reduced transparency → 中性实色回退 */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --bg-1: #12151b;
+    --bg-2: #171b23;
+    --bg-3: #1e232e;
+  }
+}
+
+/* ═══════ 精密检定台纪律段：琥珀仅 CTA / 图表主系列 / active 细条 ═══════ */
+.panel {
+  position: relative;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
+  min-width: 0;
+  overflow: hidden;
+  transition: border-color var(--t-base) var(--ease);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .025) inset, 0 4px 16px rgba(0, 0, 0, .18);
+}
+.panel::after { content: none; }
+.panel.hero {
+  border-color: var(--line-2);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .03) inset, 0 8px 28px rgba(0, 0, 0, .28);
+}
+.panel.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: linear-gradient(90deg, var(--acc), transparent 38%);
+  opacity: .78;
+  pointer-events: none;
+  z-index: 2;
+}
+.panel.hero .panel-hd h3 { color: var(--tx-1); text-shadow: none; }
+
+.topbar {
+  border-bottom-color: var(--line);
+  background: var(--bg-1);
+}
+.topbar::after { content: none; }
+
+/* 主按钮：琥珀实底 + 深字（唯一实心品牌 CTA） */
+button.primary {
+  background: var(--acc);
+  border-color: var(--acc);
+  color: var(--on-acc);
+  font-weight: 700;
+  letter-spacing: .01em;
+  box-shadow: none;
+}
+button.primary:hover {
+  background: var(--acc-hi);
+  border-color: var(--acc-hi);
+  box-shadow: none;
+}
+button.primary:active { background: var(--acc-lo); border-color: var(--acc-lo); box-shadow: none; }
+
+/* 危险按钮：语义红描边 */
+button.danger {
+  border-color: color-mix(in srgb, var(--bad) 45%, transparent);
+  color: var(--bad);
+}
+button.danger:hover {
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  border-color: var(--bad);
+  box-shadow: none;
+}
+button.danger.alert {
+  border-color: color-mix(in srgb, var(--bad) 45%, transparent);
+  color: var(--bad);
+}
+button.danger.alert:hover {
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  box-shadow: none;
+}
+
+/* ghost 选中：中性提亮 + 左侧琥珀细条，不用实底抢 CTA */
+button.ghost.on {
+  background: var(--bg-3);
+  color: var(--tx-1);
+  border-color: transparent;
+  box-shadow: inset 2px 0 0 var(--acc);
+}
+
+/* 品牌字 */
+.rail-brand-tx b {
+  background: none;
+  -webkit-background-clip: unset;
+  background-clip: unset;
+  color: var(--tx-1);
+  filter: none;
+}
+.rail-brand-tx span { color: var(--acc); letter-spacing: .04em; font-weight: 500; }
+
+/* rail active：左 2px 琥珀条 + 中性选中底，图标不染色 */
+.rail-item.on::before {
+  background: var(--acc);
+  box-shadow: none;
+  width: 2px;
+}
+.rail-item.on svg { color: var(--tx-1); filter: none; }
+.rail-item.on[data-view] svg { color: var(--acc); }
+
+/* 侧栏分组前缀：中性，不用绿 */
+.sect[open] summary::before { background: var(--tx-4); }
+
+/* KPI：白字为主（空值由 .is-empty 降权） */
+.readout-primary .ro-item dd { text-shadow: none; }
+.readout-primary .ro-item.v-ok dd,
+.readout-primary .ro-item.v-warn dd,
+.readout-primary .ro-item.v-bad dd { text-shadow: none; color: var(--tx-1); }
+.readout-primary .ro-item.is-empty dd { color: var(--tx-4); font-size: var(--fs-15); font-weight: 500; }
+
+/* 主 KPI 成功率先于其他读数——判定三要素之一 */
+.readout-primary .ro-item:first-child dd {
+  font-size: calc(var(--fs-kpi) + 4px);
+  letter-spacing: -.03em;
+}
+
+.metric.v-ok dd, .metric.v-warn dd, .metric.v-info dd { color: var(--tx-1); text-shadow: none; }
+.metric.v-bad dd { color: var(--bad); text-shadow: none; }
+.metric.is-empty dd { color: var(--tx-4); font-size: var(--fs-13); font-weight: 500; }
+
+/* 降智判定条 */
+.verdict.g { box-shadow: inset 3px 0 0 var(--ok); }
+.verdict.x { box-shadow: inset 3px 0 0 var(--bad); }
+.verdict.b, .verdict.acc, .verdict.r { box-shadow: inset 3px 0 0 var(--acc); }
+.verdict.g .vtitle, .verdict.x .vtitle { text-shadow: none; }
+
+/* SLO chip：中性底，仅数值/点表状态；红仅 fail */
+.slo-chip {
+  background: var(--bg-3);
+  border-color: var(--line-2);
+}
+.slo-chip.p { border-color: color-mix(in srgb, var(--ok) 35%, transparent); color: var(--tx-2); box-shadow: none; }
+.slo-chip.p b { color: var(--tx-1); }
+.slo-chip.w { border-color: color-mix(in srgb, var(--warn) 40%, transparent); color: var(--tx-2); box-shadow: none; }
+.slo-chip.w b { color: var(--tx-1); }
+.slo-chip.f { border-color: color-mix(in srgb, var(--bad) 38%, transparent); color: var(--tx-2); box-shadow: none; }
+.slo-chip.f b { color: var(--tx-1); }
+.slo-chip::before { box-shadow: none; }
+
+.verdict-block .ticks i { box-shadow: none; }
+.verdict-block .ticks i.f { box-shadow: none; }
+
+/* 空态卡片：仪器铭牌感 */
+.ob-card {
+  border: 1px solid var(--line-2);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, .4);
+  background:
+    linear-gradient(135deg, rgba(240, 180, 41, .04) 0%, transparent 42%),
+    color-mix(in srgb, var(--bg-2) 94%, transparent);
+}
+.ob-card::before {
+  content: "";
+  display: block;
+  width: 32px;
+  height: 3px;
+  background: var(--acc);
+  border-radius: 2px;
+  margin-bottom: var(--s-4);
+}
+.ob-card h2 {
+  background: none;
+  -webkit-background-clip: unset;
+  background-clip: unset;
+  color: var(--tx-1);
+}
+
+/* 画布：蓝黑 + 主区无底纹（网格只在图井内） */
+main {
+  background-image: none;
+  background-color: var(--bg-0);
+}
+
+/* 主 KPI 标签：小写密排，不靠全大写撑层级 */
+.ro-item dt { letter-spacing: .04em; text-transform: none; font-size: var(--fs-11); font-weight: 500; }
+.metrics .metric dt { letter-spacing: .02em; text-transform: none; font-size: var(--fs-11); }
+
+/* 面板标题不整段染绿；主图序号/说明保持灰 */
+.panel-hd h3 { color: var(--tx-1); }
+
+/* ---------- 带档位的数字输入（滑杆 + 精确输入） ----------
+   侧栏本来就窄，所以滑杆压到 16px 高、档位标签 10px。
+   数字框保持原样可编辑 —— 需要精确值时直接打字，滑杆的吸附逻辑不参与。 */
+.numfield {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 3px;
+}
+.numfield > input[type="number"] { width: 100%; }
+
+.numfield-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 16px;
+  margin: 0;
+  background: transparent;
+  cursor: ew-resize;
+  border: 0;
+}
+.numfield-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+}
+.numfield-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  margin-top: -5.5px;
+  border-radius: 50%;
+  background: var(--tx-1);
+  border: 2px solid var(--bg-1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .5);
+  transition: background var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+}
+.numfield-range:hover::-webkit-slider-thumb { background: var(--acc); }
+.numfield-range:active::-webkit-slider-thumb { transform: scale(1.15); }
+.numfield-range:focus-visible { outline: none; }
+.numfield-range:focus-visible::-webkit-slider-thumb {
+  background: var(--acc);
+  box-shadow: 0 0 0 3px rgba(240, 180, 41, .25);
+}
+.numfield-range::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+}
+.numfield-range::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--tx-1);
+  border: 2px solid var(--bg-1);
+}
+.numfield-range:hover::-moz-range-thumb { background: var(--acc); }
+
+/* 档位标签：贴在滑轨下方对应位置，可点即跳。
+   位置用 left 百分比，所以首尾档位要内缩一点，别被容器裁掉。 */
+.numfield-ticks {
+  position: relative;
+  height: 13px;
+  margin: 0 6px;
+}
+.numfield-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--tx-3);
+  font-size: 10px;
+  line-height: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease);
+  white-space: nowrap;
+}
+.numfield-tick:first-child { transform: translateX(-10%); }
+.numfield-tick:last-child { transform: translateX(-90%); }
+.numfield-tick:hover { color: var(--acc); }
+
+/* 档位太密时（如 0/0.1/0.25/0.5/0.75/1）隔一个显示，避免糊成一片 */
+.numfield-tick[data-hide="1"] { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .numfield-range::-webkit-slider-thumb { transition: none; }
+}

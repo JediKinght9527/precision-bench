@@ -390,10 +390,128 @@
     else if (e.key === 'Enter') { e.preventDefault(); runPalette(paletteIdx); }
   });
 
+  /* ── 带档位的数字输入 ──────────────────────────────────────────────
+     痛点：并发、请求数、定频这些高频参数全靠手打，既慢又容易落到
+     没意义的数上（并发 37、请求数 473）。但又不能只给滑杆 —— 有些场景
+     需要精确值（比如对齐某次复现）。
+
+     所以做成双模：滑杆负责"快速到位 + 阻尼档位"，数字框负责"精确输入"。
+       · 拖动滑杆 → 实时预览
+       · 松手 → 吸附到最近的档位（阻尼感）
+       · 点档位标签 → 直接跳到该值
+       · 在数字框里打字 → 原样保留，不被吸附逻辑改写
+     跨度大的字段（并发 1–256、请求数 10–10000）走对数刻度，否则低分段
+     会被压成一小截。 */
+  const SLIDER_POS = 1000; // 滑杆内部用 0..1000 的整数位置，避免浮点误差
+
+  function makeSlider(input, cfg) {
+    const min = Number(cfg.min ?? input.min ?? 0);
+    const max = Number(cfg.max ?? input.max ?? Math.max(...cfg.detents));
+    const log = cfg.scale === 'log' && min > 0 && max / min > 50;
+    const toPos = (v) => {
+      const c = Math.min(max, Math.max(min, Number(v) || 0));
+      return log
+        ? Math.round(SLIDER_POS * (Math.log(c / min) / Math.log(max / min)))
+        : Math.round(SLIDER_POS * ((c - min) / (max - min || 1)));
+    };
+    const toVal = (pos) => {
+      if (log) return min * Math.pow(max / min, pos / SLIDER_POS);
+      return min + ((max - min) * pos) / SLIDER_POS;
+    };
+
+    const wrap = document.createElement('div');
+    wrap.className = 'numfield';
+    const range = document.createElement('input');
+    range.type = 'range';
+    range.className = 'numfield-range';
+    range.min = '0';
+    range.max = String(SLIDER_POS);
+    range.step = '1';
+    range.setAttribute('aria-label', (input.closest('label')?.textContent || input.id).trim());
+
+    /* 档位标记：中间档位只画刻度线，不写文字。
+       侧栏一半字段只有 ~120px 宽，绝对定位的数字标签必然互相碰撞
+       （"300"+"600" 会叠成 "30000"），所以改成「刻度线 + 两端数值」——
+       宽度再窄也不会糊。当前值由上面的数字框负责显示。 */
+    const ticks = document.createElement('div');
+    ticks.className = 'numfield-ticks';
+    const brief = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M`
+      : n >= 1000 ? `${(n / 1000).toFixed(n % 1000 ? 1 : 0)}k` : String(n));
+    const fmtTick = cfg.tickFormat || brief;
+    const detents = cfg.detents.filter((d) => d >= min && d <= max);
+    detents.forEach((d, i) => {
+      const b = document.createElement('button');
+      const isEnd = i === 0 || i === detents.length - 1;
+      b.type = 'button';
+      b.className = isEnd ? 'numfield-tick is-end' : 'numfield-tick is-mark';
+      b.textContent = isEnd ? fmtTick(d) : '';
+      b.title = isEnd ? String(d) : `档位 ${d}（点击跳到这里）`;
+      b.setAttribute('aria-label', isEnd ? String(d) : `跳到 ${d}`);
+      b.style.left = `${(toPos(d) / SLIDER_POS) * 100}%`;
+      b.dataset.val = String(d);
+      b.addEventListener('click', () => setValue(d));
+      ticks.appendChild(b);
+    });
+    // 两端标签各自贴边，中间档位在窄栏里按可用宽度抽稀
+    const thin = () => {
+      const marks = [...ticks.querySelectorAll('.is-mark')];
+      const w = ticks.clientWidth || 120;
+      const stride = Math.max(1, Math.ceil(marks.length / Math.max(2, Math.floor(w / 14))));
+      marks.forEach((el, i) => { el.dataset.hide = i % stride ? '1' : '0'; });
+    };
+    thin();
+    if (window.ResizeObserver) new ResizeObserver(thin).observe(ticks);
+
+    const sync = () => { range.value = String(toPos(input.value)); };
+    function setValue(v, fromBox) {
+      const clamped = Math.min(max, Math.max(min, Number(v)));
+      input.value = fromBox && Number.isFinite(clamped) ? clamped : Math.round(clamped * 1000) / 1000;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      sync();
+    }
+
+    range.addEventListener('input', () => {           // 拖动中：实时但不吸附
+      const raw = toVal(Number(range.value));
+      input.value = Math.round(raw * 1000) / 1000;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const release = () => {                             // 松手：吸附到最近档位
+      const raw = toVal(Number(range.value));
+      const near = detents.reduce((a, b) => (Math.abs(b - raw) < Math.abs(a - raw) ? b : a), detents[0]);
+      setValue(raw);
+      if (detents.length > 1 && near != null) setValue(near);
+    };
+    range.addEventListener('change', release);
+    range.addEventListener('pointerup', release);
+    range.addEventListener('keyup', (e) => { if (e.key.startsWith('Arrow')) release(); });
+
+    input.addEventListener('change', sync);
+    input.addEventListener('input', sync);
+
+    input.parentNode.insertBefore(wrap, input);
+    wrap.appendChild(input);
+    wrap.appendChild(range);
+    wrap.appendChild(ticks);
+    sync();
+    input.dataset.hasSlider = '1';
+  }
+
+  function enhanceNumerics(config) {
+    let n = 0;
+    for (const [id, cfg] of Object.entries(config)) {
+      const el = document.getElementById(id);
+      if (!el || el.type !== 'number' || el.dataset.hasSlider) continue;
+      makeSlider(el, cfg);
+      n++;
+    }
+    return n;
+  }
+
   window.UI = {
     C, AXIS, SPLIT, GRAT, MINOR, GRID, fmt, pct, fmtTime, fmtTimeParts, tstr, hm, dtstr, nowTime, esc, grad, hexA,
     tooltip, base, initChart, noData, axisLabelFor,
     toast, setBusy, openModal, closeModal, confirm: confirmBox,
     openDrawer, closeDrawer, sortable, setPaletteProvider, openPalette,
+    enhanceNumerics,
   };
 })();

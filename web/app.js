@@ -140,6 +140,37 @@ function sparkline(canvas, values, color) {
   g.fillStyle = grad; g.fill();
 }
 
+/* ---------- 带档位的数字输入 ----------
+   只给「有自然档位、高频调参」的字段加滑杆；价格、显著性、随机种子这类
+   自由值保持纯输入框 —— 给它们硬加滑杆只会碍事。 */
+const NUMERIC_SLIDERS = {
+  // 负载：档位只留真正会用的量级，9 个档在侧栏窄栏里会挤成糊字
+  concurrency:    { detents: [1, 2, 4, 8, 16, 32, 64, 128, 256], min: 1, max: 256, scale: 'log' },
+  request_count:  { detents: [10, 50, 100, 500, 1000, 5000, 10000], min: 1, max: 10000, scale: 'log' },
+  rate:           { detents: [1, 5, 20, 100, 500], min: 0.1, max: 500, step: 0.5 },
+  duration_s:     { detents: [10, 30, 60, 300, 1800], min: 1, max: 3600, scale: 'log' },
+  ramp_s:         { detents: [0, 30, 60, 300], min: 0, max: 600, step: 1 },
+  cooldown_s:     { detents: [0, 30, 60, 300], min: 0, max: 600, step: 1 },
+  warmup:         { detents: [0, 1, 3, 10, 20], min: 0, max: 20 },
+  ramp_rate:      { detents: [0, 1, 5, 25, 50], min: 0, max: 50, step: 0.5 },
+  timeout_s:      { detents: [10, 30, 60, 300, 600], min: 1, max: 600, scale: 'log' },
+  retries:        { detents: [0, 1, 2, 3, 5], min: 0, max: 5 },
+  jitter:         { detents: [0, 0.1, 0.5, 1], min: 0, max: 1, step: 0.05 },
+  // 请求内容
+  max_tokens:     { detents: [16, 64, 256, 1024, 4096], min: 1, max: 8192, scale: 'log' },
+  temperature:    { detents: [0, 0.5, 1, 2], min: 0, max: 2, step: 0.1 },
+  top_p:          { detents: [0.1, 0.5, 0.9, 1], min: 0, max: 1, step: 0.05 },
+  // 合格线：最常被反复调的一组
+  slo_ttft:       { detents: [500, 1500, 3000, 5000], min: 50, max: 10000, scale: 'log' },
+  slo_tpot:       { detents: [10, 30, 50, 100], min: 1, max: 500, scale: 'log' },
+  slo_e2e:        { detents: [1000, 5000, 10000, 30000], min: 100, max: 120000, scale: 'log' },
+  // 缓存探针
+  c_rounds:       { detents: [2, 4, 8, 20], min: 2, max: 20 },
+  c_prefix:       { detents: [256, 1024, 4096, 8192], min: 64, max: 16384, scale: 'log' },
+  // 降智检测
+  'b-concurrent': { detents: [1, 4, 16, 64], min: 1, max: 64, scale: 'log' },
+};
+
 /* ---------- 图表 ---------- */
 const charts = {};
 ['e2e', 'ttft', 'tpot', 'tput', 'heat', 'err', 'dist', 'cmp'].forEach((k) => { charts[k] = UI.initChart($('ch-' + k)); });
@@ -2102,6 +2133,9 @@ function initPinParams() {
 if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
 
 loadCfg();
+// 必须在 loadCfg 之后：滑杆要按恢复出来的初值定位，否则松手就会被吸到默认档位。
+// 方案（预设）恢复时也会走各 input 的 change 事件，滑杆会自动跟随同步。
+UI.enhanceNumerics(NUMERIC_SLIDERS);
 $('btnSavePreset').onclick = savePreset;
 $('btnLoadPreset').onclick = () => {
   const name = ($('preset_name')?.value || '').trim() || readPresets()[0]?.name;
