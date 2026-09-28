@@ -682,6 +682,8 @@ button.ghost.on {
   border-color: transparent;
 }
 button.mini { height: 26px; padding: 0 var(--s-2); font-size: var(--fs-11); }
+/* 表格内的行内按钮压到 22px —— 它是行内最高元素，26px 会把行高撑到 37px */
+table.grid td.act button.mini { height: 22px; padding: 0 7px; }
 button.block { width: 100%; }
 
 .btnrow {
@@ -1812,7 +1814,7 @@ table.grid th {
   z-index: 2;
   background: var(--bg-1);
   text-align: left;
-  padding: 7px 10px;
+  padding: 6px 10px 5px;
   border-bottom: 1px solid var(--line-2);
   color: var(--tx-3);
   font-weight: 500;
@@ -1831,15 +1833,18 @@ table.grid th.asc::after { content: " ↑"; color: var(--tx-2); }
 table.grid th.desc::after { content: " ↓"; color: var(--tx-2); }
 table.grid tbody tr {
   content-visibility: auto;
-  contain-intrinsic-size: auto 35px;
+  contain-intrinsic-size: auto 31px;
   transition: background var(--t-fast) var(--ease);
 }
+/* 密度：7px → 5px。行高 41 → 31px，与 Grafana Table 的 Small 档一致。
+   监控软件一屏要放下几十行运行记录，41px 只能看 12 行，太浪费纵向空间。 */
 table.grid td {
-  padding: 7px 10px;
+  padding: 5px 10px;
   border-bottom: 1px solid var(--line);
   white-space: nowrap;
   vertical-align: middle;
   color: var(--tx-2);
+  line-height: 1.45;
 }
 table.grid td:first-child { color: var(--tx-1); }
 table.grid tbody tr:hover td { background: var(--bg-3); }

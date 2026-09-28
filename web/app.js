@@ -881,7 +881,9 @@ function renderCompareChart() {
     for (let i = 0; i < S.length; i += step) { if (S[i].e2e_ms != null) pts.push([+(S[i].ts - t0).toFixed(1), S[i].e2e_ms]); }
     // 名字必须唯一：多条同名 run 会被 ECharts 图例合并，看起来像是丢数据
     const stamp = new Date((r.samples[0].ts || 0) * 1000).toTimeString().slice(0, 5);
-    return { name: `${r.target} (${r.model}) ${stamp}`, type: 'line', showSymbol: false,
+    // target 与 model 同名时不重复（渠道名直接填了模型名的情况很常见）
+    const label = r.target === r.model ? r.target : `${r.target}·${r.model}`;
+    return { name: `${label} ${stamp}`, type: 'line', showSymbol: false,
              data: pts, lineStyle: { color: r.color, width: 1.4 } };
   }).filter(Boolean);
   if (!series.length) { UI.noData($('ch-cmp'), '暂无可对比轨迹', '完成至少两次测试后可叠加对比'); return; }
@@ -889,10 +891,17 @@ function renderCompareChart() {
     ...UI.anim(series.reduce((n, s) => n + s.data.length, 0)),
     tooltip: UI.tooltip('ms'),
     // 图例放底部：多条轨迹时顶部会盖住波形
-    legend: { bottom: 0, left: 'center', itemWidth: 14, itemHeight: 3,
-              textStyle: { color: C.tx2, fontSize: 10 }, data: series.map((x) => x.name) },
-    grid: { left: 60, right: 20, top: 22, bottom: 46 },
-    xAxis: { type: 'value', name: '相对时间(s)', nameTextStyle: { color: C.tx3, fontSize: 10 }, axisLabel: AXIS, axisLine: { lineStyle: { color: C.line2 } }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
+    // 图例放底部：多条轨迹时顶部会盖住波形。
+    // width/overflow 必设 —— 5 条长名字（渠道+模型+时间）会换行并溢出画布，
+    // 表现为图例文字互相叠在一起。
+    legend: { bottom: 0, left: 'center', width: '96%', itemWidth: 14, itemHeight: 3,
+              type: 'scroll', pageIconColor: C.tx3, pageIconInactiveColor: C.line2,
+              pageTextStyle: { color: C.tx3, fontSize: 10 },
+              textStyle: { color: C.tx2, fontSize: 10, overflow: 'truncate', width: 150 },
+              data: series.map((x) => x.name) },
+    grid: { left: 60, right: 20, top: 22, bottom: 56 },
+    xAxis: { type: 'value', name: '相对时间(s)', nameLocation: 'middle', nameGap: 26,
+             nameTextStyle: { color: C.tx3, fontSize: 10 }, axisLabel: AXIS, axisLine: { lineStyle: { color: C.line2 } }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
     yAxis: { type: 'value', scale: true, splitNumber: 4, nameLocation: 'middle', nameRotate: 90, nameGap: 44, nameTextStyle: { color: C.tx3, fontSize: 11 }, axisLabel: UI.axisLabelFor(series.flatMap((s) => s.data.map((p) => p[1])), 'ms'), name: (UI.axisLabelFor(series.flatMap((s) => s.data.map((p) => p[1])), 'ms').name || 'E2E'), axisLine: { show: false }, splitLine: GRAT, minorSplitLine: MINOR, minorTick: { show: true, splitNumber: 5 }, axisTick: { show: true, length: 3, lineStyle: { color: C.line2 } } },
     series,
   }), true);
