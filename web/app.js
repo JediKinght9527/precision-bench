@@ -241,8 +241,11 @@ function summaryEmpty() {
   $('metrics').innerHTML = METRIC_DEFS.map(([k, , , , hint]) => `<div class="metric is-empty"><dt title="${esc(hint || '')}">${k}</dt><dd>–</dd></div>`).join('');
   $('verdictBlock').className = 'verdict-block';
   $('vbState').textContent = '待检测';
-  setScore(null);
-  $('vbNum').innerHTML = '—<span>ms</span>';
+  $('vbRing').innerHTML = '<div class="rings-empty">–</div>';
+  $('vbRing').title = '';
+  $('vbRingsLegend').innerHTML = '';
+  $('vbLabel').textContent = '等待运行';
+  $('vbNum').innerHTML = '—';
   $('vbSub').textContent = '粘贴渠道配置并开始测试';
   $('vbSlo').innerHTML = '';
   $('vbTicks').innerHTML = ''; $('vbTicksCap').textContent = '最近请求';
@@ -250,8 +253,10 @@ function summaryEmpty() {
 
 /* 健康分 0–100：按本次 summary 实时核算 —— 成功率 30 + Goodput 20 + TTFT 15 + E2E 25 + TPOT 10 = 100
    （延迟相对 run.slo 合格线；Goodput = 三项均达标的请求占比，直接反映「能用的请求」比例） */
-function healthScore(sum, run) {
-  if (!sum || !sum.total) return null;
+/* 五个分项的达标度（0–1）。healthScore / scoreBreakdown / 三环共用同一份算法，
+   否则环上的进度与数字分数会各算各的，出现"环满但分低"的矛盾。
+   latPart：≤合格线=1，≥2×合格线=0，中间线性；无可测样本给 0.5 中性。 */
+function scoreParts(sum, run) {
   const slo = runSlo(run);
   const clamp = (x) => Math.max(0, Math.min(1, x));
   const sr = clamp(sum.success_rate ?? 0);
@@ -265,51 +270,122 @@ function healthScore(sum, run) {
   const e2e = latPart(sum.e2e && sum.e2e.p95, slo.e2e_ms);
   const tpot = (sum.measurable && !sum.measurable.tpot) ? 0.5 : latPart(sum.tpot && sum.tpot.p95, slo.tpot_ms);
   const gp = sum.goodput != null ? clamp(sum.goodput) : (sum.ok ? (ttft + e2e + tpot) / 3 : 0.5);
-  // 满分 100：30+20+15+25+10
-  const score = Math.round(sr * 30 + gp * 20 + ttft * 15 + e2e * 25 + tpot * 10);
-  return score;
+  return { sr, gp, ttft, e2e, tpot };
 }
-/* SCORE 明细 tooltip（挂在环上），让用户知道分是怎么来的 */
+
+/* 三环的三个维度：可靠性 / 速度 / 有效吞吐。
+   延迟维度取 E2EL 与 TTFT 中较差的一项——只报 E2EL 会掩盖首字延迟。 */
+function ringParts(sum, run) {
+  if (!sum || !sum.total) return null;
+  const p = scoreParts(sum, run);
+  const slo = runSlo(run);
+  const lat = Math.min(p.e2e, p.ttft);
+  const latMs = Math.max(
+    (sum.e2e && sum.e2e.p95) || 0,
+    (sum.ttft && sum.ttft.p95) || 0,
+  );
+  return {
+    rings: [
+      { k: 'reliab', label: '可靠性', v: p.sr, disp: pct(p.sr), cls: 'p',
+        tip: `成功率 ${pct(p.sr)}，合格 ≥${pct(slo_rate(slo))}` },
+      { k: 'speed', label: '速度', v: lat, disp: latMs ? fmtTime(latMs) : '—', cls: 'p',
+        tip: `首字/端到端较慢项 ${latMs ? fmtTime(latMs) : 'n/a'}，合格 ≤${fmtTime(Math.max(slo.ttft_ms, slo.e2e_ms))}` },
+      { k: 'thru', label: '有效吞吐', v: p.gp, disp: pct(p.gp), cls: 'p',
+        tip: `Goodput ${pct(p.gp)}：三项延迟均达标的请求占比` },
+    ],
+  };
+}
+
+/* 把 evaluate() 的每条判据结果贴到对应的环上。
+   环的颜色是「维度身份」，达标状态另用状态点表达，两者不混用——
+   否则绿色环到底是"速度环"还是"达标"就说不清了。 */
+function ringVerdicts(sum, run) {
+  const v = evaluate(sum, run);
+  const by = {};
+  for (const ch of v.chips || []) by[ch.k] = ch;
+  const rp = ringVerdicts(sum, run);
+  if (!rp) return null;
+  const sr = by['Success rate'];
+  const e2e = by['E2EL P95'];
+  const ttft = by['TTFT P95'];
+  // 速度环取首字/端到端中较差的状态
+  const order = { p: 0, w: 1, f: 2 };
+  const speedCls = (!e2e || !ttft || e2e.cls === '' || ttft.cls === '')
+    ? '' : (order[e2e.cls] >= order[ttft.cls] ? e2e.cls : ttft.cls);
+  rp.rings[0].cls = (sr && sr.cls) || '';
+  rp.rings[1].cls = speedCls;
+  rp.rings[2].cls = '';          // Goodput 无独立合格线
+  rp.rings[0].note = sr && sr.tip;
+  rp.rings[1].note = (e2e && e2e.tip) || (ttft && ttft.tip);
+  return rp;
+}
+
+/* ── 三环仪表 ────────────────────────────────────────────────────────────
+   参照 Apple HIG 的运动环语汇：纯色（无渐变/无阴影）、圆头线帽、起点在 12 点
+   方向顺时针、轨道用同色低透明。不复制 Apple 的 Move/Exercise/Stand 语义与
+   色值，改用本项目自己的三维度：可靠性 / 速度 / 有效吞吐。
+   环长 = 该维度相对合格线的达标度，环满即刚好达标。
+   半径由外到内递减 12 = 环宽 9 + 间隙 3，符合 HIG「间隙不大于环宽」。 */
+const RING_SVG = 132, RING_C = RING_SVG / 2;
+const RING_R = [54, 40, 26];         // 半径差 14 = 环宽 10 + 间隙 4
+const RING_TONE = ['a', 'b', 'c'];   // a=可靠性 b=速度 c=有效吞吐
+const RING_W = 10;
+
+/* 外缘 20 根刻度针，每 5% 一根（每 4 根加长）—— 让它读作仪表而非进度条 */
+const RING_TICKS = Array.from({ length: 20 }, (_, i) => {
+  const a = (i / 20) * Math.PI * 2 - Math.PI / 2;
+  const r1 = 60, r2 = i % 4 === 0 ? 64.5 : 62.5;
+  const x1 = RING_C + Math.cos(a) * r1, y1 = RING_C + Math.sin(a) * r1;
+  const x2 = RING_C + Math.cos(a) * r2, y2 = RING_C + Math.sin(a) * r2;
+  return `<line x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}"/>`;
+}).join('');
+
+function ringsSvg(rp) {
+  const arcs = rp.rings.map((g, i) => {
+    const c = 2 * Math.PI * RING_R[i];
+    const frac = Math.max(0, Math.min(1, g.v || 0));
+    return `<g class="ring tone-${RING_TONE[i]}">
+      <title>${esc(`${g.label} ${g.disp}，达标度 ${Math.round(frac * 100)}%`)}\n${esc(g.tip)}</title>
+      <circle class="ring-track" cx="${RING_C}" cy="${RING_C}" r="${RING_R[i]}" stroke-width="${RING_W}"/>
+      <circle class="ring-arc" cx="${RING_C}" cy="${RING_C}" r="${RING_R[i]}" stroke-width="${RING_W}"
+        stroke-dasharray="${(c * frac).toFixed(2)} ${c.toFixed(2)}"/>
+    </g>`;
+  }).join('');
+  return `<svg class="rings-svg" viewBox="0 0 ${RING_SVG} ${RING_SVG}" aria-hidden="true">
+    <g class="ring-ticks">${RING_TICKS}</g>
+    <g transform="rotate(-90 ${RING_C} ${RING_C})">${arcs}</g>
+  </svg>`;
+}
+
+function healthScore(sum, run) {
+  if (!sum || !sum.total) return null;
+  const p = scoreParts(sum, run);
+  // 满分 100：30+20+15+25+10
+  return Math.round(p.sr * 30 + p.gp * 20 + p.ttft * 15 + p.e2e * 25 + p.tpot * 10);
+}
+/* 健康分明细 tooltip（挂在环上），让用户知道分是怎么来的 */
 function scoreBreakdown(sum, run) {
   if (!sum || !sum.total) return '';
   const slo = runSlo(run);
-  const clamp = (x) => Math.max(0, Math.min(1, x));
-  const sr = clamp(sum.success_rate ?? 0);
-  const latPart = (v, limit) => {
-    if (v == null || !limit || !sum.ok) return 0.5;
-    if (v <= limit) return 1;
-    if (v >= limit * 2) return 0;
-    return clamp(1 - (v - limit) / limit);
-  };
-  const ttft = latPart(sum.ttft && sum.ttft.p95, slo.ttft_ms);
-  const e2e = latPart(sum.e2e && sum.e2e.p95, slo.e2e_ms);
-  const tpot = (sum.measurable && !sum.measurable.tpot) ? 0.5 : latPart(sum.tpot && sum.tpot.p95, slo.tpot_ms);
-  const gp = sum.goodput != null ? clamp(sum.goodput) : (sum.ok ? (ttft + e2e + tpot) / 3 : 0.5);
+  const p = scoreParts(sum, run);
   return [
-    `成功率 ${pct(sr)} × 30 = ${(sr * 30).toFixed(1)}`,
-    `Goodput ${pct(gp)} × 20 = ${(gp * 20).toFixed(1)}`,
-    `TTFT ${fmtTime(sum.ttft && sum.ttft.p95)} / ${fmtTime(slo.ttft_ms)} × 15 = ${(ttft * 15).toFixed(1)}`,
-    `E2EL ${fmtTime(sum.e2e && sum.e2e.p95)} / ${fmtTime(slo.e2e_ms)} × 25 = ${(e2e * 25).toFixed(1)}`,
-    `TPOT ${sum.measurable && !sum.measurable.tpot ? 'n/a ×10 = 5.0（中性）' : `${fmtTime(sum.tpot && sum.tpot.p95)} / ${fmtTime(slo.tpot_ms)} × 10 = ${(tpot * 10).toFixed(1)}`}`,
+    `成功率 ${pct(p.sr)} × 30 = ${(p.sr * 30).toFixed(1)}`,
+    `Goodput ${pct(p.gp)} × 20 = ${(p.gp * 20).toFixed(1)}`,
+    `TTFT ${fmtTime(sum.ttft && sum.ttft.p95)} / ${fmtTime(slo.ttft_ms)} × 15 = ${(p.ttft * 15).toFixed(1)}`,
+    `E2EL ${fmtTime(sum.e2e && sum.e2e.p95)} / ${fmtTime(slo.e2e_ms)} × 25 = ${(p.e2e * 25).toFixed(1)}`,
+    `TPOT ${sum.measurable && !sum.measurable.tpot ? 'n/a ×10 = 5.0（中性）' : `${fmtTime(sum.tpot && sum.tpot.p95)} / ${fmtTime(slo.tpot_ms)} × 10 = ${(p.tpot * 10).toFixed(1)}`}`,
   ].join('\n');
-}
-
-function setScore(score, tip) {
-  const ring = $('vbRing');
-  const el = $('vbScore');
-  if (!ring || !el) return;
-  if (score == null) { ring.style.setProperty('--score', 0); el.textContent = '–'; ring.title = ''; return; }
-  ring.style.setProperty('--score', String(score));
-  el.textContent = String(score);
-  ring.title = tip || '';
 }
 
 /* 新运行开始：立刻清空上一次的残留（否则看起来像"没反应"） */
 function renderRunning(run) {
   $('verdictBlock').className = 'verdict-block s-run';
   $('vbState').textContent = '运行中';
-  setScore(null);
-  $('vbNum').innerHTML = '—<span>ms</span>';
+  $('vbRing').innerHTML = '<div class="rings-empty">–</div>';
+  $('vbRing').title = '';
+  $('vbRingsLegend').innerHTML = '';
+  $('vbLabel').textContent = '采集中';
+  $('vbNum').innerHTML = '—';
   $('vbSub').innerHTML = run
     ? `<b>${esc(run.target === run.model ? run.target : `${run.target}　${run.model}`)}</b>`
     : '';
@@ -375,13 +451,27 @@ function renderCards(sum) {
   const v = evaluate(sum, run);
   const vb = $('verdictBlock');
   vb.className = 'verdict-block s-' + v.state + (p95 == null ? ' vb-empty' : '');
-  setScore(healthScore(sum, run), scoreBreakdown(sum, run));
   $('vbState').textContent = v.label;
-  if (p95 != null) {
-    const tp = fmtTimeParts(p95);
-    $('vbNum').innerHTML = `${tp.v}<span>${tp.u}</span>`;
+  /* 三环仪表：环长 = 相对合格线的达标度，圆心读数取三环中最优的一项。
+     达标度与健康分共用 scoreParts()，避免"环满但分低"的自相矛盾。 */
+  const rp = ringVerdicts(sum, run);
+  const score = healthScore(sum, run);
+  $('vbRing').title = scoreBreakdown(sum, run);
+  if (!rp) {
+    $('vbRing').innerHTML = `<div class="rings-empty">–</div>`;
+    $('vbLabel').textContent = '等待运行';
+    $('vbNum').innerHTML = `—`;
   } else {
-    $('vbNum').innerHTML = `—<span>ms</span>`;
+    const best = rp.rings.reduce((a, b) => (b.v > a.v ? b : a));
+    $('vbRing').innerHTML = ringsSvg(rp) + `
+      <div class="rings-core">
+        <b>${score == null ? '–' : score}</b>
+        <span>健康分</span>
+      </div>`;
+    $('vbRingsLegend').innerHTML = rp.rings.map((g, i) =>
+      `<span class="tone-${RING_TONE[i]}" title="${esc(g.note || g.tip)}"><i></i>${esc(g.label)}<em class="r-${g.cls || 'na'}">${esc(g.disp)}</em></span>`).join('');
+    $('vbLabel').textContent = `最佳项 · ${best.label}`;
+    $('vbNum').innerHTML = esc(best.disp);
   }
   // target 与 model 同名时不重复显示（如渠道名直接填了模型名）
   const t = run ? (run.target === run.model ? run.target : `${run.target}　${run.model}`) : '';
@@ -421,9 +511,13 @@ function renderCards(sum) {
     ? `<span class="vb-note ${noteCls}">${esc(v.notes.join(' · '))}</span>`
     : '';
   $('vbSub').innerHTML = `${who}${noteHtml}<span class="vb-cache">${esc(cacheLine)}</span>`;
-  const shortK = { 'Success rate': '成功率', 'E2EL P95': 'E2EL', 'TTFT P95': 'TTFT', 'TPOT P95': 'TPOT' };
-  $('vbSlo').innerHTML = (v.chips || []).map((ch) =>
-    `<span class="slo-chip ${ch.cls}" title="${esc(ch.tip || '')}">${esc(shortK[ch.k] || ch.k)} <b>${esc(ch.v)}</b></span>`).join('');
+  // 合格线基准：原先这里渲染四枚 chip，但它们的数值与三环图例、右侧指标格
+  // 完全重复（同屏三处）。这里改为一行阈值——chip 独有、别处没有的信息。
+  const slo = runSlo(run);
+  $('vbSlo').innerHTML =
+    `<span>合格线</span><span>成功率 ≥${pct(slo_rate(slo))}</span>` +
+    `<span>首字 ≤${fmtTime(slo.ttft_ms)}</span><span>端到端 ≤${fmtTime(slo.e2e_ms)}</span>` +
+    `<span>逐字 ≤${fmtTime(slo.tpot_ms)}</span>`;
   renderTicks(run);
 }
 
@@ -768,7 +862,7 @@ function renderCompareChart() {
   }).filter(Boolean);
   if (!series.length) { UI.noData($('ch-cmp'), '无成功样本 · 暂无可对比轨迹'); return; }
   charts.cmp.setOption(UI.base({
-    ...UI.anim(S.length),
+    ...UI.anim(series.reduce((n, s) => n + s.data.length, 0)),
     tooltip: UI.tooltip('ms'),
     // 图例放底部：多条轨迹时顶部会盖住波形
     legend: { bottom: 0, left: 'center', itemWidth: 14, itemHeight: 3,
