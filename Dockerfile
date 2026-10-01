@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # 多阶段构建：依赖层走缓存，最终镜像不带 uv（对齐 uv 官方 docker 示例）
 
-FROM ghcr.io/astral-sh/uv:python3.12-trixie-slim@sha256:10b94fe3550b7a96e3982860bb82cdefba6300264a7a40bb9334acf21a450974 AS builder
+FROM ghcr.io/astral-sh/uv:python3.12-trixie-slim@sha256:5ae92e4d35b8d586d50ddf4aba6ecdd9f744237284d31c86bf45077e4e17e4bd AS builder
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
